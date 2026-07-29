@@ -6,4 +6,5 @@ Scripts for distance-resolved analysis of quantitative MRI maps
 - distmap_script.py: for computing the distance map 
 - prepost_reg.sh: for across-timepoints registration
 - dataframe4gam.py: for preparing the data for gam modeling
-- gamfit_pre.R: for gam modeling
+- gamfit_pre.R: for single-timepoint gam modeling
+- gamfit_prepost.R: for 2-timepoints gam modeling
