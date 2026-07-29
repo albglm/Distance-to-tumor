@@ -178,6 +178,12 @@ echo -e "- normalize fods"
 mtnormalise ${NP}_wmfod_${outname}.mif ${NP}_wmfod_${outname}_norm.mif -mask ${NP}_mask_upsampled.mif
 echo -e "global intensity normalization done\n"
 
+### peaks extraction ###
+echo "########################################################################################"
+echo -e "- peaks extraction"
+sh2peaks -nthreads ${n_threads} -threshold 0 ${NP}_wmfod_${outname}_norm.mif ${NP}_wmfod_${outname}_norm_peaks.nii.gz
+echo -e "peaks extraction done\n"
+
 ### dti metrics ###
 echo "########################################################################################"
 echo -e "- calculate metrics"
@@ -185,3 +191,5 @@ dwi2tensor ${NP}_upsampled.mif -mask ${NP}_mask_upsampled.mif ${NP}_tensor.mif -
 tensor2metric ${NP}_tensor.mif -fa ${NP}_fa.nii.gz -adc ${NP}_adc.nii.gz -nthreads ${n_threads}
 tensor2metric ${NP}_tensor.mif -value ${NP}_1val.nii.gz -nthreads ${n_threads}
 echo -e "metrics calculated\n"
+
+
