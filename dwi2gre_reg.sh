@@ -83,6 +83,13 @@ antsApplyTransforms -d 3 \
   -t ${dwi_reg}/${NP}_dwi2t1_ants.mat \
   -o [${wm/.nii.gz/_r2s_thr_+edema.nii.gz}, 0] \
   -n NearestNeighbor
+antsApplyTransforms -d 3 \
+  -i ${segm_dir}/segm/segmentation_dwi_edema_bin.nii.gz \
+  -r ${r2s_reg}/${mov/.nii.gz/_masked.nii.gz} \
+  -t [${r2s_reg}/r2s2t1_0GenericAffine.mat,1] \
+  -t ${dwi_reg}/${NP}_dwi2t1_ants.mat \
+  -o [${segm_dir}/segm/segmentation_r2s_edema_bin.nii.gz, 0] \
+  -n NearestNeighbor
 
 ### deep grey matter segmentation in dwi/gre space ###
 mkdir -p ${r2s_reg}/first
