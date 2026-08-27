@@ -1,4 +1,4 @@
-# Perilesional Distance-Resolved qMRI Analysis
+# Peritumoral Distance-Resolved qMRI Analysis
 
 Two scripts that take a patient's tumor segmentation and diffusion/qMRI data and
 produce, per patient, a data-driven landmark distance at which a tissue metric
