@@ -31,7 +31,7 @@
 #     for this (measure, map_label) combination (per-timepoint and delta).
 #   - The same NIfTI inputs that pipeline used to produce them, at BOTH
 #     timepoints (metric map, distance map, tumor segmentation, white
-#     matter mask).
+#     matter mask). Pre and Post must be co-registered.
 #
 # HOW TO RUN
 #   1. Edit USER SETTINGS below (measure, map_label, paths, patient lists).
@@ -81,6 +81,9 @@ excluded_region_mask_fn   <- NULL
 
 # ============================ INPUT FILE PATHS =================================
 # Identical to gam_landmark_analysis_prepost.R -- edit both if your layout changes.
+# If the distance map/segmentation/white matter mask are only
+# computed once, at baseline, symlink the expected Post-timepoint path to
+# the baseline file.
 
 time_base_dir <- function(time) if (time == "Pre") base_dir_pre else base_dir_post
 
