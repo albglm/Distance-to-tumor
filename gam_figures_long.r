@@ -1,26 +1,27 @@
 ################################################################################
-# GAM LANDMARK VISUALIZATION: PRE- VS POST-TREATMENT COMPARISON
+# GAM LANDMARK VISUALIZATION: LONGITUDINAL (TWO-TIMEPOINT) COMPARISON
 ################################################################################
 # WHAT IT DOES
 #   Four figures for ONE metric and ONE distance-map variant at a time (set
 #   both at the top of USER SETTINGS -- change and re-run for another):
-#     1. PATIENT GRID: one small panel per patient, with their Pre and Post
+#     1. PATIENT GRID: one small panel per patient, with their TP1 and TP2
 #        fitted curves overlaid, each with its own landmark point and
 #        bootstrap 95% CI. Patients flagged for a likely mismatched
-#        Pre/Post correspondence are marked distinctly.
-#     2. POPULATION OVERVIEW: every patient's Pre and Post curves faintly in
+#        TP1/TP2 correspondence are marked distinctly.
+#     2. POPULATION OVERVIEW: every patient's TP1 and TP2 curves faintly in
 #        the background, with the cohort median curve and IQR ribbon for
 #        each timepoint on top -- shows whether there's a systematic
-#        before/after shift at the group level.
-#     3. PAIRED SHIFT PLOT: each patient's Pre and Post landmark shown as
+#        shift at the group level.
+#     3. PAIRED SHIFT PLOT: each patient's TP1 and TP2 landmark shown as
 #        two connected points -- the individual-level view of who moved,
 #        how far, and in which direction (a boxplot alone hides this).
-#     4. COHORT BOXPLOTS: the Pre-to-Post landmark shift and gradient shift
-#        across the full cohort, split by an optional subgroup label.
+#     4. COHORT BOXPLOTS: the landmark shift and gradient shift between
+#        timepoints across the full cohort, split by an optional subgroup
+#        label.
 #
 #   This does NOT re-run the GAM fitting -- it reads the results CSVs produced by
 #   gam_landmark_analysis_prepost.R (for the saved k, landmarks, CIs, and
-#   shift values) and re-extracts + refits each patient's joint Pre/Post
+#   shift values) and re-extracts + refits each patient's joint TP1/TP2
 #   curve from the same NIfTI files purely for display.
 #
 # DEPENDENCIES
@@ -31,7 +32,7 @@
 #     for this (measure, map_label) combination (per-timepoint and delta).
 #   - The same NIfTI inputs that pipeline used to produce them, at BOTH
 #     timepoints (metric map, distance map, tumor segmentation, white
-#     matter mask). Pre and Post must be co-registered.
+#     matter mask). TP1 and TP2 must be co-registered.
 #
 # HOW TO RUN
 #   1. Edit USER SETTINGS below (measure, map_label, paths, patient lists).
@@ -50,10 +51,10 @@ measure   <- "R2s"
 map_label <- "iso"
 
 ## --- paths ---------
-base_dir_pre  <- "/data/project/TP1"
-base_dir_post <- "/data/project/TP2"
-output_dir    <- file.path(base_dir_post, "res")     # where gam_landmark_analysis_prepost.R saved its results CSVs
-figures_dir   <- file.path(base_dir_post, "figures")  # where this script saves its plots
+base_dir_tp1  <- "/data/project/TP1"
+base_dir_tp2  <- "/data/project/TP2"
+output_dir    <- file.path(base_dir_tp2, "res")     # where gam_landmark_analysis_prepost.R saved its results CSVs
+figures_dir   <- file.path(base_dir_tp2, "figures")  # where this script saves its plots
 dir.create(figures_dir, showWarnings = FALSE, recursive = TRUE)
 
 participant_list <- fread("/data/project/part.csv", sep = "\t")
@@ -81,11 +82,10 @@ excluded_region_mask_fn   <- NULL
 
 # ============================ INPUT FILE PATHS =================================
 # Identical to gam_landmark_analysis_prepost.R -- edit both if your layout changes.
-# If the distance map/segmentation/white matter mask are only
-# computed once, at baseline, symlink the expected Post-timepoint path to
-# the baseline file.
+# If the distance map/segmentation/white matter mask are only computed
+# once, at TP1, symlink the expected TP2 path to the TP1 file.
 
-time_base_dir <- function(time) if (time == "Pre") base_dir_pre else base_dir_post
+time_base_dir <- function(time) if (time == "TP1") base_dir_tp1 else base_dir_tp2
 
 metric_file_fn <- function(subject, time) file.path(time_base_dir(time), "derivatives/GRE", subject, paste0(measure, ".nii"))
 distance_map_file_fn <- function(subject, time) file.path(time_base_dir(time), "derivatives/DWI", subject,
@@ -124,12 +124,12 @@ extract_voxel_data <- function(subject, time, measure, map_label) {
              distance_raw = distance_map[valid_mask], scalar_raw = metric_map[valid_mask])
 }
 
-# Loads and combines a patient's Pre and Post voxel data, then refits the
+# Loads and combines a patient's TP1 and TP2 voxel data, then refits the
 # joint curve (using the k already selected by the pipeline) and returns
 # predicted values for both timepoints over each timepoint's own 1st-99th
 # percentile distance range.
 refit_patient_curves <- function(subject, k_value) {
-  voxel_data <- rbindlist(lapply(c("Pre", "Post"), function(tp)
+  voxel_data <- rbindlist(lapply(c("TP1", "TP2"), function(tp)
     tryCatch(extract_voxel_data(subject, tp, measure, map_label), error = function(e) NULL)))
   if (is.null(voxel_data) || nrow(voxel_data) < 30L || uniqueN(voxel_data$time) < 2L) return(NULL)
 
@@ -139,18 +139,18 @@ refit_patient_curves <- function(subject, k_value) {
   )
   if (is.null(gam_model)) return(NULL)
 
-  rbindlist(lapply(c("Pre", "Post"), function(tp) {
+  rbindlist(lapply(c("TP1", "TP2"), function(tp) {
     d_range <- quantile(voxel_data[time == tp]$distance_raw, c(0.01, 0.99), na.rm = TRUE)
     grid <- seq(d_range[1], d_range[2], length.out = n_grid_points)
     data.table(timepoint = tp, distance_raw = grid,
-               fitted = predict(gam_model, newdata = data.frame(distance_raw = grid, time = factor(tp, levels = c("Pre", "Post")))))
+               fitted = predict(gam_model, newdata = data.frame(distance_raw = grid, time = factor(tp, levels = c("TP1", "TP2")))))
   }))
 }
 
 # Reads the two results CSVs that gam_landmark_analysis_prepost.R produced
 # for this (measure, map_label) combination.
 load_per_timepoint_results <- function() {
-  f <- file.path(output_dir, sprintf("%s_%s_GAM_prepost_per_timepoint.csv", measure, map_label))
+  f <- file.path(output_dir, sprintf("%s_%s_GAM_longitudinal_per_timepoint.csv", measure, map_label))
   if (!file.exists(f)) stop("Per-timepoint results file not found: ", f, " -- run gam_landmark_analysis_prepost.R first.")
   dt <- fread(f)
   setkey(dt, participant)
@@ -158,7 +158,7 @@ load_per_timepoint_results <- function() {
 }
 
 load_delta_results <- function() {
-  f <- file.path(output_dir, sprintf("%s_%s_GAM_prepost_delta.csv", measure, map_label))
+  f <- file.path(output_dir, sprintf("%s_%s_GAM_longitudinal_delta.csv", measure, map_label))
   if (!file.exists(f)) stop("Delta results file not found: ", f, " -- run gam_landmark_analysis_prepost.R first.")
   dt <- fread(f)
   setkey(dt, participant)
@@ -179,15 +179,15 @@ theme_pub <- function(base_size = 16, strip_size = 13) {
     )
 }
 
-# Pre/Post colors (Okabe-Ito, colorblind-safe), distinguished by linetype
+# TP1/TP2 colors (Okabe-Ito, colorblind-safe), distinguished by linetype
 # too, so they hold up in grayscale.
-PRE_COLOR   <- "#0072B2"  # Okabe-Ito blue
-POST_COLOR  <- "#D55E00"  # Okabe-Ito vermillion
-PRE_LINETYPE  <- "solid"
-POST_LINETYPE <- "dashed"
+TP1_COLOR    <- "#0072B2"  # Okabe-Ito blue
+TP2_COLOR    <- "#D55E00"  # Okabe-Ito vermillion
+TP1_LINETYPE <- "solid"
+TP2_LINETYPE <- "dashed"
 
 # =============================================================================
-# FIGURE 1: per-patient grid -- Pre and Post curves, landmarks, and CIs
+# FIGURE 1: per-patient grid -- TP1 and TP2 curves, landmarks, and CIs
 # =============================================================================
 
 build_figure_grid <- function() {
@@ -232,18 +232,18 @@ build_figure_grid <- function() {
     geom_point(data = landmarks_dt, aes(x = landmark, y = fitted_at_landmark, color = timepoint,
                                           shape = landmark_shift_flag),
                inherit.aes = FALSE, size = 2.6) +
-    scale_color_manual(values = c(Pre = PRE_COLOR, Post = POST_COLOR)) +
-    scale_fill_manual(values  = c(Pre = PRE_COLOR, Post = POST_COLOR)) +
-    scale_linetype_manual(values = c(Pre = PRE_LINETYPE, Post = POST_LINETYPE)) +
+    scale_color_manual(values = c(TP1 = TP1_COLOR, TP2 = TP2_COLOR)) +
+    scale_fill_manual(values  = c(TP1 = TP1_COLOR, TP2 = TP2_COLOR)) +
+    scale_linetype_manual(values = c(TP1 = TP1_LINETYPE, TP2 = TP2_LINETYPE)) +
     scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), labels = c(`FALSE` = "matched", `TRUE` = "flagged"), name = "correspondence") +
     facet_wrap(~ facet_label, scales = "free", ncol = n_col) +
-    labs(title = paste(measure, "-", map_label, "- Pre vs Post"),
+    labs(title = paste(measure, "-", map_label, "- TP1 vs TP2"),
          x = "Geodesic distance from CET boundary", y = measure, color = "timepoint", linetype = "timepoint") +
     theme_pub(base_size = 13, strip_size = 11)
 }
 
 # =============================================================================
-# FIGURE 2: population overview -- Pre vs Post, faint individuals + IQR
+# FIGURE 2: population overview -- TP1 vs TP2, faint individuals + IQR
 # =============================================================================
 
 build_figure_population <- function() {
@@ -270,7 +270,7 @@ build_figure_population <- function() {
   common_grid <- seq(0, 1, length.out = n_grid_points)
   interp_list <- list()
   for (pid in unique(all_curves$participant)) {
-    for (tp in c("Pre", "Post")) {
+    for (tp in c("TP1", "TP2")) {
       sub <- all_curves[participant == pid & timepoint == tp]
       if (nrow(sub) < 2L) next
       interp_list[[paste(pid, tp)]] <- data.table(
@@ -291,16 +291,16 @@ build_figure_population <- function() {
               alpha = 0.25, linewidth = 0.35) +
     geom_ribbon(data = summary_dt, aes(x = rel_distance, ymin = q25, ymax = q75, fill = timepoint), alpha = 0.2) +
     geom_line(data = summary_dt, aes(x = rel_distance, y = median_fitted, color = timepoint, linetype = timepoint), linewidth = 1.3) +
-    scale_color_manual(values = c(Pre = PRE_COLOR, Post = POST_COLOR)) +
-    scale_fill_manual(values  = c(Pre = PRE_COLOR, Post = POST_COLOR)) +
-    scale_linetype_manual(values = c(Pre = PRE_LINETYPE, Post = POST_LINETYPE)) +
-    labs(title = paste(measure, "-", map_label, "- Pre vs Post"),
+    scale_color_manual(values = c(TP1 = TP1_COLOR, TP2 = TP2_COLOR)) +
+    scale_fill_manual(values  = c(TP1 = TP1_COLOR, TP2 = TP2_COLOR)) +
+    scale_linetype_manual(values = c(TP1 = TP1_LINETYPE, TP2 = TP2_LINETYPE)) +
+    labs(title = paste(measure, "-", map_label, "- TP1 vs TP2"),
          x = "Normalized distance from CET boundary (0-1)", y = measure, color = "timepoint", fill = "timepoint", linetype = "timepoint") +
     theme_pub()
 }
 
 # =============================================================================
-# FIGURE 3: paired shift plot -- each patient's Pre -> Post landmark
+# FIGURE 3: paired shift plot -- each patient's TP1 -> TP2 landmark
 # =============================================================================
 
 build_figure_paired_shift <- function() {
@@ -309,7 +309,7 @@ build_figure_paired_shift <- function() {
                .(participant, timepoint, landmark, landmark_shift_flag)]
   if (!nrow(dt)) return(NULL)
 
-  dt[, timepoint := factor(timepoint, levels = c("Pre", "Post"))]
+  dt[, timepoint := factor(timepoint, levels = c("TP1", "TP2"))]
   dt[, flag_label := ifelse(landmark_shift_flag, "flagged", "matched")]
 
   ggplot(dt, aes(x = timepoint, y = landmark, group = participant, color = flag_label)) +
@@ -341,7 +341,7 @@ build_figure_boxplots <- function() {
                    measure.vars = c("landmark_shift", "gradient_shift"),
                    variable.name = "feature", value.name = "value")
   long_dt[, feature := factor(feature, levels = c("landmark_shift", "gradient_shift"),
-                                labels = c("Landmark shift (Post - Pre)", "Gradient shift (Post - Pre)"))]
+                                labels = c("Landmark shift (TP2 - TP1)", "Gradient shift (TP2 - TP1)"))]
 
   base_group_colors <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999")
   n_groups <- uniqueN(long_dt$group)
@@ -357,7 +357,7 @@ build_figure_boxplots <- function() {
   }
 
   p +
-    labs(title = paste(measure, "-", map_label, "- Pre-to-Post shift"), x = NULL, y = NULL) +
+    labs(title = paste(measure, "-", map_label, "- shift between timepoints"), x = NULL, y = NULL) +
     theme_pub() +
     theme(legend.position = if (n_groups > 1) "right" else "none")
 }
@@ -371,7 +371,7 @@ if (!is.null(p_grid)) {
   n_patients <- length(setdiff(patient_ids_for_grid, excluded_participants))
   n_col <- min(4L, n_patients)
   n_rows <- ceiling(n_patients / n_col)
-  out_grid <- file.path(figures_dir, sprintf("%s_%s_prepost_patient_grid.pdf", measure, map_label))
+  out_grid <- file.path(figures_dir, sprintf("%s_%s_longitudinal_patient_grid.pdf", measure, map_label))
   pdf(out_grid, width = 6 * n_col, height = 4 * n_rows)
   print(p_grid)
   dev.off()
@@ -380,7 +380,7 @@ if (!is.null(p_grid)) {
 
 p_population <- build_figure_population()
 if (!is.null(p_population)) {
-  out_population <- file.path(figures_dir, sprintf("%s_%s_prepost_population_overview.pdf", measure, map_label))
+  out_population <- file.path(figures_dir, sprintf("%s_%s_longitudinal_population_overview.pdf", measure, map_label))
   pdf(out_population, width = 10, height = 7)
   print(p_population)
   dev.off()
@@ -389,7 +389,7 @@ if (!is.null(p_population)) {
 
 p_paired <- build_figure_paired_shift()
 if (!is.null(p_paired)) {
-  out_paired <- file.path(figures_dir, sprintf("%s_%s_prepost_paired_shift.pdf", measure, map_label))
+  out_paired <- file.path(figures_dir, sprintf("%s_%s_longitudinal_paired_shift.pdf", measure, map_label))
   pdf(out_paired, width = 6, height = 6)
   print(p_paired)
   dev.off()
@@ -398,7 +398,7 @@ if (!is.null(p_paired)) {
 
 p_boxplots <- build_figure_boxplots()
 if (!is.null(p_boxplots)) {
-  out_boxplots <- file.path(figures_dir, sprintf("%s_%s_prepost_boxplots.pdf", measure, map_label))
+  out_boxplots <- file.path(figures_dir, sprintf("%s_%s_longitudinal_boxplots.pdf", measure, map_label))
   pdf(out_boxplots, width = 8, height = 5)
   print(p_boxplots)
   dev.off()
