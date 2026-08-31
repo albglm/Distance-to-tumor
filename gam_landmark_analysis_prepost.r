@@ -40,6 +40,10 @@
 #   - 1 participant list file (participants without both timepoints are
 #     skipped automatically)
 #
+#   Pre and Post must be co-registered (same voxel grid, same space) --
+#   this script does voxel-by-voxel comparisons across timepoints with no
+#   registration step of its own.
+#
 # OPTIONAL INPUT FILES
 #   - 1 additional exclusion mask can be added. Defaults to unset (skipped)
 #
