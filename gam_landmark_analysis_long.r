@@ -1,28 +1,29 @@
 ################################################################################
-# GAM LANDMARK ANALYSIS: PRE- VS POST-TREATMENT COMPARISON
+# GAM LANDMARK ANALYSIS: LONGITUDINAL (TWO-TIMEPOINT) COMPARISON
 ################################################################################
 # WHAT IT DOES
 #   For each requested MRI metric and each requested distance-map variant,
-#   and for every participant who has BOTH a pre-treatment and a
-#   post-treatment scan:
+#   and for every participant who has two co-registered scans (TP1 and
+#   TP2 -- e.g. a follow-up visit, before/after an intervention, or any
+#   two timepoints):
 #     1. Loads the metric map, the geodesic distance-from-tumor map, and a
 #        tumor segmentation at EACH timepoint, and builds one combined
-#        table of valid tissue voxels tagged "Pre" or "Post".
+#        table of valid tissue voxels tagged "TP1" or "TP2".
 #     2. Fits a single smooth curve per timepoint (metric vs. distance,
 #        jointly modeled with a time factor), finds the first landmark
-#        peak/trough nearest the tumor in each curve, and matches the Post
-#        landmark to the Pre one (flagging cases where they land
+#        peak/trough nearest the tumor in each curve, and matches the TP2
+#        landmark to the TP1 one (flagging cases where they land
 #        suspiciously far apart -- likely a mismatched correspondence
 #        rather than genuine change).
 #     3. Bootstraps both landmark locations together (resampling voxels
 #        from both timepoints, refitting, and re-matching each time) for
-#        95% CIs, and computes the Pre-to-Post shift.
+#        95% CIs, and computes the shift between timepoints.
 #     4. Saves one row per participant per timepoint (curve fit &
 #        landmark details) and one row per participant summarizing the
-#        Pre-to-Post change, plus prints group-level summary tables.
+#        change between timepoints, plus prints group-level summary tables.
 #
 #   This script simply takes the first peak/trough nearest the
-#   tumor at Pre, then finds whichever Post peak/trough best corresponds
+#   tumor at TP1, then finds whichever TP2 peak/trough best corresponds
 #   to it.
 #
 # DEPENDENCIES
@@ -40,7 +41,7 @@
 #   - 1 participant list file (participants without both timepoints are
 #     skipped automatically)
 #
-#   Pre and Post must be co-registered (same voxel grid, same space) --
+#   TP1 and TP2 must be co-registered (same voxel grid, same space) --
 #   this script does voxel-by-voxel comparisons across timepoints with no
 #   registration step of its own.
 #
@@ -48,10 +49,10 @@
 #   - 1 additional exclusion mask can be added. Defaults to unset (skipped)
 #
 # OUTPUT, per (measure, map_label) combination
-#   - <output_dir>/<measure>_<map_label>_GAM_prepost_per_timepoint.csv
+#   - <output_dir>/<measure>_<map_label>_GAM_longitudinal_per_timepoint.csv
 #     one row per participant per timepoint (curve fit + landmark details)
-#   - <output_dir>/<measure>_<map_label>_GAM_prepost_delta.csv
-#     one row per participant (Pre-to-Post landmark shift)
+#   - <output_dir>/<measure>_<map_label>_GAM_longitudinal_delta.csv
+#     one row per participant (the shift between timepoints)
 #
 # HOW TO RUN
 #   1. Edit the USER SETTINGS block below to match your paths/metrics.
@@ -75,9 +76,9 @@ options(future.globals.maxSize = 16 * 1024^3)
 n_workers <- min(8, future::availableCores())
 
 ## --- study / paths -----------------------------------------------------------
-base_dir_pre     <- "/data/project/TP1"  # root folder for the pre-treatment timepoint
-base_dir_post    <- "/data/project/TP2"  # root folder for the post-treatment timepoint
-output_dir       <- file.path(base_dir_post, "res")   # where result CSVs are saved
+base_dir_tp1     <- "/data/project/TP1"  # root folder for the first timepoint
+base_dir_tp2     <- "/data/project/TP2"  # root folder for the second timepoint
+output_dir       <- file.path(base_dir_tp2, "res")   # where result CSVs are saved
 participant_list <- fread("/data/project/part.csv", sep = "\t")
 participant_ids  <- participant_list[["NP"]]
 
@@ -86,7 +87,7 @@ map_labels      <- c("iso")   # distance-map variant tag(s), used to build the d
 
 ## --- optional additional mask ---------------------------------------------------
 # Defaults to NULL (skipped). To use it, set it to a function that takes a
-# subject ID and a timepoint ("Pre"/"Post") and returns a file path to a
+# subject ID and a timepoint ("TP1"/"TP2") and returns a file path to a
 # binary NIfTI mask.
 excluded_region_mask_fn <- NULL
 # Example: excluded_region_mask_fn <- function(subject, time) file.path(time_base_dir(time), "derivatives/GRE", subject, "reg/t1_first_seg_all_fast_firstseg_bin.nii.gz")  # TRUE = deep grey matter, removed
@@ -116,12 +117,12 @@ voxels_per_k                <- 15   # voxels (pooled across both timepoints) req
 k_index_adequate_threshold  <- 0.8  # k-index below this = fit may be too rigid, for either curve
 edf_k_ratio_flag_threshold  <- 0.9  # edf/k above this = curve using up most of its flexibility
 
-# --- Pre/Post peak-matching settings -----------------------------------------
-# How far apart (in distance units) the Post landmark can land from the
-# Pre landmark before this is flagged as a likely mismatch rather than
-# genuine change, and the search window used when re-locating the Post
-# landmark during bootstrap resampling (anchored near the Pre location so
-# resampled Post landmarks stay correspondence-consistent).
+# --- TP1/TP2 peak-matching settings -----------------------------------------
+# How far apart (in distance units) the TP2 landmark can land from the
+# TP1 landmark before this is flagged as a likely mismatch rather than
+# genuine change, and the search window used when re-locating the TP2
+# landmark during bootstrap resampling (anchored near the TP1 location so
+# resampled TP2 landmarks stay correspondence-consistent).
 peak_match_window <- 50
 
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
@@ -141,12 +142,12 @@ tryCatch(
 
 # ============================ INPUT FILE PATHS =================================
 # One function per required file, each taking a subject ID and a timepoint
-# ("Pre"/"Post") and returning its file path. Edit these directly to match
-# wherever your files actually are. If the distance map/segmentation/white matter mask are only
-# computed once, at baseline, symlink the expected Post-timepoint path to
-# the baseline file.
+# ("TP1"/"TP2") and returning its file path. Edit these directly to match
+# wherever your files actually are. If the distance map/segmentation/white
+# matter mask are only computed once, at TP1, symlink the expected TP2
+# path to the TP1 file.
 
-time_base_dir <- function(time) if (time == "Pre") base_dir_pre else base_dir_post
+time_base_dir <- function(time) if (time == "TP1") base_dir_tp1 else base_dir_tp2
 
 metric_file_fn <- function(subject, time) file.path(time_base_dir(time), "derivatives/GRE", subject, paste0(measure, ".nii"))
   # the quantitative MRI metric map being analyzed (e.g. R2*, QSM...)
@@ -226,7 +227,7 @@ prep_voxel_data <- function(voxel_data) {
 }
 
 # Fits one smooth curve per timepoint jointly: scalar_raw ~ time +
-# smooth(distance_raw), with a separate smooth for "Pre" and "Post".
+# smooth(distance_raw), with a separate smooth for "TP1" and "TP2".
 fit_gam_safe <- function(voxel_data, k_value) {
   tryCatch(
     gam(scalar_raw ~ time + s(distance_raw, by = time, bs = "cr", k = k_value),
@@ -236,12 +237,12 @@ fit_gam_safe <- function(voxel_data, k_value) {
 }
 
 # Numerically estimates the slope of the fitted curve for one timepoint
-# ("Pre" or "Post"), at each point on `distance_grid`.
+# ("TP1" or "TP2"), at each point on `distance_grid`.
 get_slope <- function(gam_model, distance_grid, time_level) {
   tryCatch({
     eps <- diff(range(distance_grid)) / 1e5
-    new_lo <- data.frame(distance_raw = distance_grid, time = factor(time_level, levels = c("Pre", "Post")))
-    new_hi <- data.frame(distance_raw = distance_grid + eps, time = factor(time_level, levels = c("Pre", "Post")))
+    new_lo <- data.frame(distance_raw = distance_grid, time = factor(time_level, levels = c("TP1", "TP2")))
+    new_hi <- data.frame(distance_raw = distance_grid + eps, time = factor(time_level, levels = c("TP1", "TP2")))
     (predict(gam_model, newdata = new_hi) - predict(gam_model, newdata = new_lo)) / eps
   }, error = function(e) NULL)
 }
@@ -262,38 +263,38 @@ find_all_peaks <- function(slope, distance_grid, type = landmark_type) {
       (slope[i + 1L] - slope[i]), numeric(1))
 }
 
-# Pairs up the Pre and Post landmarks: takes the first (nearest-tumor) Pre
-# landmark as the anchor, then the Post landmark closest to it. Flags the
+# Pairs up the TP1 and TP2 landmarks: takes the first (nearest-tumor) TP1
+# landmark as the anchor, then the TP2 landmark closest to it. Flags the
 # pair if they're farther apart than `peak_match_window` -- likely a
 # mismatched correspondence (e.g. a different curve feature entirely)
-# rather than genuine Pre-to-Post change.
-match_landmarks <- function(slope_pre, slope_post, distance_grid, max_shift = peak_match_window) {
-  landmarks_pre  <- find_all_peaks(slope_pre,  distance_grid)
-  landmarks_post <- find_all_peaks(slope_post, distance_grid)
+# rather than genuine change between timepoints.
+match_landmarks <- function(slope_tp1, slope_tp2, distance_grid, max_shift = peak_match_window) {
+  landmarks_tp1 <- find_all_peaks(slope_tp1, distance_grid)
+  landmarks_tp2 <- find_all_peaks(slope_tp2, distance_grid)
 
-  if (!length(landmarks_pre))
-    return(list(loc_pre = NA_real_, loc_post = NA_real_,
-                n_pre = 0L, n_post = length(landmarks_post),
+  if (!length(landmarks_tp1))
+    return(list(loc_tp1 = NA_real_, loc_tp2 = NA_real_,
+                n_tp1 = 0L, n_tp2 = length(landmarks_tp2),
                 shift = NA_real_, shift_flag = TRUE))
 
-  loc_pre <- landmarks_pre[1L]
+  loc_tp1 <- landmarks_tp1[1L]
 
-  if (!length(landmarks_post))
-    return(list(loc_pre = loc_pre, loc_post = NA_real_,
-                n_pre = length(landmarks_pre), n_post = 0L,
+  if (!length(landmarks_tp2))
+    return(list(loc_tp1 = loc_tp1, loc_tp2 = NA_real_,
+                n_tp1 = length(landmarks_tp1), n_tp2 = 0L,
                 shift = NA_real_, shift_flag = TRUE))
 
-  loc_post <- landmarks_post[which.min(abs(landmarks_post - loc_pre))]
-  shift    <- abs(loc_post - loc_pre)
+  loc_tp2 <- landmarks_tp2[which.min(abs(landmarks_tp2 - loc_tp1))]
+  shift   <- abs(loc_tp2 - loc_tp1)
 
-  list(loc_pre = loc_pre, loc_post = loc_post,
-       n_pre = length(landmarks_pre), n_post = length(landmarks_post),
+  list(loc_tp1 = loc_tp1, loc_tp2 = loc_tp2,
+       n_tp1 = length(landmarks_tp1), n_tp2 = length(landmarks_tp2),
        shift = round(shift, 4), shift_flag = shift > max_shift)
 }
 
-# During bootstrap, searches for the Post landmark near a given anchor
+# During bootstrap, searches for the TP2 landmark near a given anchor
 # (rather than blindly taking the nearest-tumor one) -- keeps resampled
-# Post landmarks correspondence-consistent with the Pre anchor.
+# TP2 landmarks correspondence-consistent with the TP1 anchor.
 find_landmark_near <- function(slope, distance_grid, anchor = NA_real_, window = peak_match_window, type = landmark_type) {
   if (is.null(slope) || length(slope) < 2L) return(NA_real_)
   n <- length(slope)
@@ -319,7 +320,7 @@ mean_slope_to_landmark <- function(slope, distance_grid, landmark_loc) {
 }
 
 # Runs mgcv's built-in check of whether k was large enough, combined
-# conservatively across both the Pre and Post smooth terms (worst k-index,
+# conservatively across both timepoints' smooth terms (worst k-index,
 # largest p-value of the two).
 check_k_adequacy <- function(gam_model) {
   tryCatch({
@@ -367,27 +368,27 @@ select_k_and_fit <- function(voxel_data) {
 }
 
 # Resamples this patient's voxels (pooled across both timepoints, so each
-# draw keeps its original Pre/Post label) with replacement `n_boot` times,
+# draw keeps its original TP1/TP2 label) with replacement `n_boot` times,
 # refits the joint curve, and re-locates both landmarks each time --
-# Post anchored near the Pre landmark from that same draw -- building up
-# paired distributions of plausible Pre and Post landmark locations.
+# TP2 anchored near the TP1 landmark from that same draw -- building up
+# paired distributions of plausible TP1 and TP2 landmark locations.
 bootstrap_patient <- function(voxel_data, k_value, distance_grid, n_boot = n_bootstrap) {
   n_voxels <- nrow(voxel_data)
   sample_n <- if (!is.null(bootstrap_voxel_cap) && bootstrap_voxel_cap < n_voxels) bootstrap_voxel_cap else n_voxels
-  loc_pre_boot  <- rep(NA_real_, n_boot)
-  loc_post_boot <- rep(NA_real_, n_boot)
+  loc_tp1_boot <- rep(NA_real_, n_boot)
+  loc_tp2_boot <- rep(NA_real_, n_boot)
 
   for (b in seq_len(n_boot)) {
     idx <- sample(n_voxels, sample_n, replace = TRUE)
     gam_model <- fit_gam_safe(voxel_data[idx], k_value)
     if (is.null(gam_model)) next
-    slope_pre  <- get_slope(gam_model, distance_grid, "Pre")
-    slope_post <- get_slope(gam_model, distance_grid, "Post")
-    landmarks_pre <- find_all_peaks(slope_pre, distance_grid)
-    loc_pre_boot[b]  <- if (length(landmarks_pre)) landmarks_pre[1L] else NA_real_
-    loc_post_boot[b] <- find_landmark_near(slope_post, distance_grid, anchor = loc_pre_boot[b])
+    slope_tp1 <- get_slope(gam_model, distance_grid, "TP1")
+    slope_tp2 <- get_slope(gam_model, distance_grid, "TP2")
+    landmarks_tp1 <- find_all_peaks(slope_tp1, distance_grid)
+    loc_tp1_boot[b] <- if (length(landmarks_tp1)) landmarks_tp1[1L] else NA_real_
+    loc_tp2_boot[b] <- find_landmark_near(slope_tp2, distance_grid, anchor = loc_tp1_boot[b])
   }
-  list(loc_pre = loc_pre_boot, loc_post = loc_post_boot)
+  list(loc_tp1 = loc_tp1_boot, loc_tp2 = loc_tp2_boot)
 }
 
 # Summarizes a bootstrap distribution into a median and 95% CI.
@@ -398,7 +399,7 @@ summarize_bootstrap <- function(boot_values) {
 }
 
 # Full per-patient pipeline: combine both timepoints' voxel data, select k,
-# fit the joint curve, match Pre/Post landmarks, bootstrap both, and
+# fit the joint curve, match TP1/TP2 landmarks, bootstrap both, and
 # package a two-row (per-timepoint) table plus a one-row (delta) table.
 compute_patient <- function(patient_id, metric_table, measure, map_label) {
 
@@ -420,20 +421,20 @@ compute_patient <- function(patient_id, metric_table, measure, map_label) {
                                   k_reason = fit$k_reason, has_peak = FALSE),
       delta = data.table()))
 
-  gam_model  <- fit$mod
-  dev_expl   <- round(summary(gam_model)$dev.expl, 6)
-  slope_pre  <- get_slope(gam_model, distance_grid, "Pre")
-  slope_post <- get_slope(gam_model, distance_grid, "Post")
+  gam_model <- fit$mod
+  dev_expl  <- round(summary(gam_model)$dev.expl, 6)
+  slope_tp1 <- get_slope(gam_model, distance_grid, "TP1")
+  slope_tp2 <- get_slope(gam_model, distance_grid, "TP2")
 
-  matched <- match_landmarks(slope_pre, slope_post, distance_grid)
+  matched <- match_landmarks(slope_tp1, slope_tp2, distance_grid)
   boot    <- bootstrap_patient(voxel_data, fit$k, distance_grid)
-  boot_pre  <- summarize_bootstrap(boot$loc_pre)
-  boot_post <- summarize_bootstrap(boot$loc_post)
+  boot_tp1 <- summarize_bootstrap(boot$loc_tp1)
+  boot_tp2 <- summarize_bootstrap(boot$loc_tp2)
 
-  per_timepoint <- rbindlist(lapply(c("Pre", "Post"), function(tp) {
-    loc   <- if (tp == "Pre") matched$loc_pre else matched$loc_post
-    slope <- if (tp == "Pre") slope_pre       else slope_post
-    boot_summary <- if (tp == "Pre") boot_pre else boot_post
+  per_timepoint <- rbindlist(lapply(c("TP1", "TP2"), function(tp) {
+    loc   <- if (tp == "TP1") matched$loc_tp1 else matched$loc_tp2
+    slope <- if (tp == "TP1") slope_tp1       else slope_tp2
+    boot_summary <- if (tp == "TP1") boot_tp1 else boot_tp2
     data.table(
       participant         = patient_id, metric = measure, map = map_label, timepoint = tp,
       selected_k          = fit$k, k_reason = fit$k_reason,
@@ -444,8 +445,8 @@ compute_patient <- function(patient_id, metric_table, measure, map_label) {
       k_pval              = round(fit$k_pval, 4),
       landmark            = round(loc, 4),
       has_peak            = !is.na(loc),
-      n_landmarks_pre     = matched$n_pre,
-      n_landmarks_post    = matched$n_post,
+      n_landmarks_tp1     = matched$n_tp1,
+      n_landmarks_tp2     = matched$n_tp2,
       landmark_shift      = matched$shift,
       landmark_shift_flag = matched$shift_flag,
       boot_median         = boot_summary$median,
@@ -456,17 +457,17 @@ compute_patient <- function(patient_id, metric_table, measure, map_label) {
 
   delta <- data.table(
     participant           = patient_id, metric = measure, map = map_label,
-    landmark_pre           = round(matched$loc_pre,  4),
-    landmark_post          = round(matched$loc_post, 4),
-    landmark_diff          = round(matched$loc_post - matched$loc_pre, 4),
-    landmark_diff_norm     = round((matched$loc_post - matched$loc_pre) / max(voxel_data$distance_raw), 4),
+    landmark_tp1           = round(matched$loc_tp1, 4),
+    landmark_tp2           = round(matched$loc_tp2, 4),
+    landmark_diff          = round(matched$loc_tp2 - matched$loc_tp1, 4),
+    landmark_diff_norm     = round((matched$loc_tp2 - matched$loc_tp1) / max(voxel_data$distance_raw), 4),
     landmark_shift         = matched$shift,
     landmark_shift_flag    = matched$shift_flag,
-    landmark_diff_boot_median = round(boot_post$median - boot_pre$median, 4),
-    rate_to_landmark_pre   = round(mean_slope_to_landmark(slope_pre,  distance_grid, matched$loc_pre),  6),
-    rate_to_landmark_post  = round(mean_slope_to_landmark(slope_post, distance_grid, matched$loc_post), 6),
-    rate_to_landmark_diff  = round(mean_slope_to_landmark(slope_post, distance_grid, matched$loc_post) -
-                                      mean_slope_to_landmark(slope_pre, distance_grid, matched$loc_pre), 6))
+    landmark_diff_boot_median = round(boot_tp2$median - boot_tp1$median, 4),
+    rate_to_landmark_tp1   = round(mean_slope_to_landmark(slope_tp1, distance_grid, matched$loc_tp1), 6),
+    rate_to_landmark_tp2   = round(mean_slope_to_landmark(slope_tp2, distance_grid, matched$loc_tp2), 6),
+    rate_to_landmark_diff  = round(mean_slope_to_landmark(slope_tp2, distance_grid, matched$loc_tp2) -
+                                      mean_slope_to_landmark(slope_tp1, distance_grid, matched$loc_tp1), 6))
 
   list(per_timepoint = per_timepoint, delta = delta)
 }
@@ -474,20 +475,20 @@ compute_patient <- function(patient_id, metric_table, measure, map_label) {
 # ================================ MAIN LOOP ==================================
 # For each distance-map variant and each metric: extract voxel data (both
 # timepoints) for every participant directly from the NIfTI files, fit the
-# GAM pre/post comparison in parallel, print summary tables, and save two
-# CSVs of results.
+# GAM longitudinal comparison in parallel, print summary tables, and save
+# two CSVs of results.
 
 for (map_label in map_labels) {
   for (measure in scalar_measures) {
 
     message(sprintf("=== metric: %s | distance-map variant: %s ===", measure, map_label))
 
-    message("extracting voxel data from NIfTI files (Pre and Post)...")
+    message("extracting voxel data from NIfTI files (TP1 and TP2)...")
     voxel_tables <- vector("list", length(participant_ids) * 2L)
     idx <- 1L
     for (i in seq_along(participant_ids)) {
       subject <- participant_ids[i]
-      for (time in c("Pre", "Post")) {
+      for (time in c("TP1", "TP2")) {
         voxel_tables[[idx]] <- tryCatch(
           extract_voxel_data(subject, time, measure, map_label),
           error = function(e) {
@@ -545,7 +546,7 @@ for (map_label in map_labels) {
       median_ci_width = round(median(boot_ci_hi - boot_ci_lo, na.rm = TRUE), 3)
     ), by = timepoint] |> print()
 
-    # Pre-to-Post change summary.
+    # Change summary between timepoints.
     results_delta[, .(
       n                 = .N,
       n_shift_flagged   = sum(landmark_shift_flag, na.rm = TRUE),
@@ -556,13 +557,13 @@ for (map_label in map_labels) {
 
     flagged <- results_delta[landmark_shift_flag == TRUE]
     if (nrow(flagged)) {
-      message(sprintf("%d participant(s) flagged for a large/likely-mismatched Pre-Post shift:", nrow(flagged)))
-      flagged[, .(participant, landmark_pre, landmark_post, landmark_shift)] |> print()
+      message(sprintf("%d participant(s) flagged for a large/likely-mismatched shift between timepoints:", nrow(flagged)))
+      flagged[, .(participant, landmark_tp1, landmark_tp2, landmark_shift)] |> print()
     } else {
       message("no flagged landmark correspondences")
     }
 
-    out_base <- file.path(output_dir, sprintf("%s_%s_GAM_prepost", measure, map_label))
+    out_base <- file.path(output_dir, sprintf("%s_%s_GAM_longitudinal", measure, map_label))
     fwrite(results_per_tp, paste0(out_base, "_per_timepoint.csv"))
     fwrite(results_delta,  paste0(out_base, "_delta.csv"))
     message("saved: ", out_base, "_per_timepoint.csv, ", out_base, "_delta.csv")
