@@ -142,9 +142,9 @@ tryCatch(
 # ============================ INPUT FILE PATHS =================================
 # One function per required file, each taking a subject ID and a timepoint
 # ("Pre"/"Post") and returning its file path. Edit these directly to match
-# wherever your files actually are. If your tumor segmentation or white
-# matter mask is only computed once (e.g. at baseline) and reused for both
-# timepoints, just ignore the `time` argument in that function.
+# wherever your files actually are. If the distance map/segmentation/white matter mask are only
+# computed once, at baseline, symlink the expected Post-timepoint path to
+# the baseline file.
 
 time_base_dir <- function(time) if (time == "Pre") base_dir_pre else base_dir_post
 
