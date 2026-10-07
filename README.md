@@ -123,7 +123,7 @@ change for a different folder structure.
 
 ## Example data
 
-`make_example_data.py` writes a small synthetic dataset (three participants,
+`make_example_data.py` writes a small synthetic dataset (six participants,
 every input file, and distance maps under all map names) to check the
 installation before using real data:
 
@@ -131,18 +131,19 @@ installation before using real data:
 python make_example_data.py /path/to/example_bids
 ```
 
-Then set `bids_root` in `gam_distance_profiles.R` and `results_dir` in
-`plot_profiles.R` to that folder. For a quick run (under a minute) also set
-`maps <- "isoweighted"` and `n_bootstrap <- 0`:
+Then set `bids_root` in `gam_distance_profiles.R` to that folder and
+`results_dir` in `plot_profiles.R` to its `derivatives/distance_profiles`
+subfolder. For a quick run (under a minute) also set `maps <- "isoweighted"`
+and `n_bootstrap <- 0`:
 
 ```
 Rscript gam_distance_profiles.R
 Rscript plot_profiles.R
 ```
 
-The landmarks should be at about 5 mm in all three participants. Step 1 needs
-the HFM library; set `RECOMPUTE = True` in `distance_maps.py` to test it on
-these data.
+The landmarks should lie between about 3 and 7 mm, inside each participant's
+T2H. Step 1 needs the HFM library; set `RECOMPUTE = True` in `distance_maps.py`
+to test it on these data.
 
 ## Running
 

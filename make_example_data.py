@@ -10,7 +10,9 @@ Each participant gets:
     - tumor segmentation (1 necrosis, 2 T2H, 3 CET), NAWM, hemisphere,
       deep gray matter and mirrored-CET masks
     - the six qMRI maps; their profiles change with distance from the CET and
-      settle at the NAWM value after a small overshoot
+      settle at the NAWM value after a small overshoot. Tumor size, T2H width,
+      landmark position, overshoot, amplitude and NAWM value differ between
+      participants (ranges in PARTICIPANT_VARIATION)
     - axial diffusivity and FOD peaks (inputs of distance_maps.py)
     - Euclidean distance maps under all map names, so gam_distance_profiles.R
       can run without the HFM library
@@ -34,7 +36,7 @@ import nibabel as nib
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-N_PARTICIPANTS = 3
+N_PARTICIPANTS = 6
 SIZE = 48          # voxels per side, 1 mm
 BRAIN_RADIUS = 21  # mm
 
@@ -47,6 +49,14 @@ METRICS = {
     "model-tensor_param-adc_dwimap": (8e-4,  1e-4,  2e-5),
     "model-tensor_param-fa_dwimap":  (0.45,  -0.25, 0.04),
 }
+# per participant, drawn uniformly from these ranges
+PARTICIPANT_VARIATION = dict(
+    cet_radius=(3.5, 7),        # mm
+    t2h_width=(4, 9),           # mm of T2H beyond the CET
+    landmark=(0.5, 0.9),        # landmark position, fraction of the T2H width
+    overshoot=(0.05, 0.25),     # height of the overshoot, fraction of the amplitude
+    amplitude=(0.6, 1.4),       # scaling of the profile amplitude
+)
 MAP_NAMES = ["iso", "isoweighted", "aniso", "anisoweighted", "contraisoweighted"]
 
 
@@ -63,23 +73,28 @@ def participant(root, subject, rng):
     brain = (x - c) ** 2 + (y - c) ** 2 + (z - c) ** 2 < BRAIN_RADIUS ** 2
     left = brain & (x < c)
 
+    v = {k: rng.uniform(*lim) for k, lim in PARTICIPANT_VARIATION.items()}
+
     # tumor in the left hemisphere, irregular T2H
-    t = np.array([c - 10, c, c]) + rng.integers(-2, 3, 3)
+    t = np.array([c - 9, c, c]) + rng.integers(-2, 3, 3)
     r = np.sqrt((x - t[0]) ** 2 + (y - t[1]) ** 2 + (z - t[2]) ** 2)
     tumor = np.zeros(brain.shape)
-    tumor[(r < 12 + 2 * np.sin(y / 3.0)) & brain] = 2
-    tumor[r < 6] = 3
-    tumor[r < 3] = 1
+    tumor[(r < v["cet_radius"] + v["t2h_width"] + 1.5 * np.sin(y / 3.0)) & brain] = 2
+    tumor[r < v["cet_radius"]] = 3
+    tumor[r < v["cet_radius"] / 2] = 1
     cet = np.isin(tumor, [1, 3])
     mirrored = np.flip(cet, axis=0)
 
     deep_gm = (x - c - 5) ** 2 + (y - c) ** 2 + (z - c + 8) ** 2 < 16
     nawm = brain & (tumor == 0) & ~deep_gm & (rng.random(brain.shape) > 0.3)
 
-    # profiles: deficit near the CET, small overshoot at about 5 mm, then NAWM value
+    # profiles: deficit near the CET, overshoot (the landmark) within the T2H,
+    # then the NAWM value
     distance = distance_transform_edt(~cet)
     distance[~brain] = 0
-    shape = np.exp(-distance / 1.5) - 0.15 * np.exp(-((distance - 5) / 2) ** 2)
+    peak = v["landmark"] * v["t2h_width"]
+    shape = v["amplitude"] * (np.exp(-4 * distance / peak)
+                              - v["overshoot"] * np.exp(-((distance - peak) / (peak / 2.5)) ** 2))
 
     contra_distance = distance_transform_edt(~mirrored)
     contra_distance[~(brain & (x >= c))] = 0
@@ -92,7 +107,8 @@ def participant(root, subject, rng):
         save(root, "masks", subject, space, "label-CETmirrored_mask", mirrored)
         save(root, "masks", subject, space, "label-contrahemi_mask", brain & (x >= c))
         for name, (nawm_value, amplitude, noise) in METRICS.items():
-            value = nawm_value + amplitude * shape + rng.normal(0, noise, brain.shape)
+            level = nawm_value + rng.normal(0, noise)          # participant NAWM value
+            value = level + amplitude * shape + rng.normal(0, noise, brain.shape)
             save(root, "qmri", subject, space, name, np.where(brain, value, 0))
         for map_name in MAP_NAMES:
             d = contra_distance if map_name.startswith("contra") else distance
