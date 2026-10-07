@@ -41,6 +41,8 @@ metric_name <- list(R2s = "R2*", QSM = "QSM", ChiDia = quote(chi[dia]), ChiPara 
                     adc = "ADC", fa = "FA")
 metric_unit <- list(R2s = expression(s^-1), QSM = "ppm", ChiDia = "ppm", ChiPara = "ppm",
                     adc = expression(mm^2/s), fa = "unitless")
+# metrics without an entry above are labeled with their code
+name_of <- function(m) if (is.null(metric_name[[m]])) m else metric_name[[m]]
 distance_unit <- if (map == "iso") "mm" else "index units"
 
 T2H_COLOR <- "#D55E00"; NAWM_COLOR <- "#009E73"; MEAN_COLOR <- "#0072B2"   # Okabe-Ito
@@ -88,7 +90,7 @@ population_panel <- function(metric) {
     geom_ribbon(data = pop, aes(u, ymin = ci_lo, ymax = ci_hi), fill = MEAN_COLOR, alpha = 0.25) +
     geom_line(data = pop, aes(u, mean), colour = MEAN_COLOR, linewidth = 1.1) +
     ref_lines(mean(r$T2H - r$all_mean), mean(r$NAWM - r$all_mean)) +
-    labs(title = metric_name[[metric]], subtitle = metric_unit[[metric]], x = NULL, y = NULL) +
+    labs(title = name_of(metric), subtitle = metric_unit[[metric]], x = NULL, y = NULL) +
     theme_classic(base_size = 14) +
     theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(size = 11, colour = "grey30"))
 }
@@ -113,7 +115,7 @@ plot_participants <- function(metric) {
     geom_hline(aes(yintercept = NAWM), colour = NAWM_COLOR, linetype = "dotted", linewidth = 0.9) +
     geom_point(data = order_(lm), aes(landmark, fitted), colour = MEAN_COLOR, size = 2) +
     facet_wrap(~ participant, scales = "free", ncol = 5) +
-    labs(title = metric_name[[metric]], x = sprintf("Distance from seed boundary (%s)", distance_unit),
+    labs(title = name_of(metric), x = sprintf("Distance from seed boundary (%s)", distance_unit),
          y = metric_unit[[metric]]) +
     theme_classic(base_size = 11) +
     theme(strip.background = element_blank(), strip.text = element_text(face = "bold"))

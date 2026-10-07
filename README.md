@@ -69,13 +69,13 @@ interpolation.
     │   │        sub-P001_space-gre_desc-para_Chimap.nii.gz       (Xpara)
     │   └── dwi/ sub-P001_space-dwi_model-tensor_param-adc_dwimap.nii.gz
     │            sub-P001_space-dwi_model-tensor_param-fa_dwimap.nii.gz
-    │            sub-P001_space-dwi_model-tensor_param-ad_dwimap.nii.gz    axial diffusivity (step 1)
-    │            sub-P001_space-dwi_model-csd_param-peaks_dwimap.nii.gz    two largest FOD peaks (step 1)
+    │            sub-P001_space-dwi_model-tensor_param-ad_dwimap.nii.gz    axial diffusivity (weighted maps)
+    │            sub-P001_space-dwi_model-csd_param-peaks_dwimap.nii.gz    two largest FOD peaks (anisotropic maps)
     ├── masks/sub-P001/{anat,dwi}/
     │        sub-P001_space-<gre|dwi>_desc-tumor_dseg.nii.gz       tumor segmentation: 1 necrosis, 2 T2H, 3 CET
     │        sub-P001_space-<gre|dwi>_label-NAWM_mask.nii.gz       thresholded FAST white matter
     │        sub-P001_space-<gre|dwi>_label-tumorhemi_mask.nii.gz  hemisphere of the tumor
-    │        sub-P001_space-dwi_label-deepGM_mask.nii.gz          FSL FIRST deep gray matter
+    │        sub-P001_space-dwi_label-deepGM_mask.nii.gz          deep gray matter, excluded (optional)
     │        sub-P001_space-dwi_label-CETmirrored_mask.nii.gz     mirrored CET (contralateral control)
     │        sub-P001_space-dwi_label-contrahemi_mask.nii.gz      contralateral hemisphere
     └── distancemaps/sub-P001/{anat,dwi}/
@@ -109,9 +109,31 @@ Other maps can be tried without changing the rest of the pipeline:
   `aniso` named `anisotest`) and run only that one (`MAPS_TO_RUN`); existing
   maps are kept.
 
-File names are defined in the block **PATHS AND INPUT FILES** at the top of
-the script (`metric_file`, `input_files()`); only this block needs
-to change for a different folder structure.
+The minimum for one analysis is a qMRI map, the tumor segmentation, a NAWM
+mask and (with `restrict_to_tumor_hemisphere <- TRUE`) the tumor-hemisphere
+mask, plus the distance map. The plain `iso` map needs no diffusion data; the
+weighted maps need the axial diffusivity and the anisotropic maps the FOD peaks.
+
+The qMRI metrics are listed in `metric_table` at the top of
+`gam_distance_profiles.R`: one row per metric with its file name, image space,
+landmark type (peak or trough) and NAWM tolerance. To analyse another metric,
+add a row; `metrics` then selects which rows are run. All file names are
+defined in the block **PATHS AND INPUT FILES**, so only this block needs to
+change for a different folder structure.
+
+## Example data
+
+`make_example_data.py` writes a small synthetic dataset (three participants,
+every input file, and distance maps under all map names) to check the
+installation before using real data:
+
+```
+python make_example_data.py /path/to/example_bids
+```
+
+Set `bids_root` (and `results_dir`) to that folder. With `n_bootstrap <- 10`,
+step 2 takes a few minutes; the landmarks should be at about 5 mm. Step 1 needs
+the HFM library; set `RECOMPUTE = True` to test it on these data.
 
 ## Running
 

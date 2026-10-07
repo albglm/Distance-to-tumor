@@ -52,27 +52,29 @@ participant_ids <- commandArgs(trailingOnly = TRUE)
 if (!length(participant_ids))
   participant_ids <- fread(file.path(bids_root, "participants.tsv"), sep = "\t")[include == 1, participant_id]
 
-# Each metric is sampled in its own space: GRE-derived metrics in GRE space
-# (anat), ADC and FA in diffusion space (dwi). All masks and distance maps must
-# exist in both spaces.
-image_space <- function(metric) if (metric %in% c("adc", "fa")) "dwi" else "gre"
-
-# file name of each qMRI metric (BIDS suffixes; desc-/param- entities)
-metric_file <- c(
-  R2s     = "space-gre_R2starmap",
-  QSM     = "space-gre_Chimap",
-  ChiDia  = "space-gre_desc-dia_Chimap",
-  ChiPara = "space-gre_desc-para_Chimap",
-  adc     = "space-dwi_model-tensor_param-adc_dwimap",
-  fa      = "space-dwi_model-tensor_param-fa_dwimap")
+# One row per qMRI metric. To add a metric, add a row.
+#   file       file name after "sub-<id>_space-<space>_" (BIDS suffix with desc-/param- entities)
+#   space      image space of the metric; masks and distance maps must exist in it
+#              ("dwi" files are read from the dwi/ folder, all others from anat/)
+#   landmark   "peak" or "trough" of the profile
+#   tol_start  initial tolerance around the NAWM mean for the landmark, metric units
+#   tol_step   widening step of the tolerance, metric units
+metric_table <- data.table(
+  metric    = c("R2s",        "QSM",    "ChiDia",        "ChiPara",        "adc",                       "fa"),
+  file      = c("R2starmap",  "Chimap", "desc-dia_Chimap", "desc-para_Chimap", "model-tensor_param-adc_dwimap", "model-tensor_param-fa_dwimap"),
+  space     = c("gre",        "gre",    "gre",           "gre",            "dwi",                       "dwi"),
+  landmark  = c("peak",       "peak",   "peak",          "peak",           "trough",                    "peak"),
+  tol_start = c(1.5,          0.002,    0.002,           0.002,            2e-5,                        0.05),
+  tol_step  = c(0.5,          0.001,    0.001,           0.001,            2e-5,                        0.01))
+info <- function(m, column) metric_table[[column]][match(m, metric_table$metric)]
 
 input_files <- function(subject, metric, map) {
-  space  <- image_space(metric)
+  space  <- info(metric, "space")
   folder <- if (space == "dwi") "dwi" else "anat"
   deriv  <- function(pipeline, name)
     file.path(bids_root, "derivatives", pipeline, subject, folder, sprintf("%s_%s.nii.gz", subject, name))
   list(
-    metric   = deriv("qmri",         metric_file[[metric]]),
+    metric   = deriv("qmri",         sprintf("space-%s_%s", space, info(metric, "file"))),
     distance = deriv("distancemaps", sprintf("space-%s_desc-%s_distance", space, map)),
     tumor    = deriv("masks",        sprintf("space-%s_desc-tumor_dseg", space)),       # tumor segmentation
     wm       = deriv("masks",        sprintf("space-%s_label-NAWM_mask", space)),       # thresholded FAST WM
@@ -85,7 +87,7 @@ tumor_labels <- c(necrosis = 1, t2h = 2, cet = 3)
 
 # ================================== ANALYSIS ==================================
 
-metrics <- c("R2s", "QSM", "ChiDia", "ChiPara", "adc", "fa")
+metrics <- metric_table$metric          # or a subset, e.g. c("R2s", "adc")
 # distance maps (desc- label of the file); isoweighted is the primary map
 maps    <- c("iso", "isoweighted", "aniso", "anisoweighted")
 
@@ -96,12 +98,7 @@ contralateral <- FALSE
 # restrict the sampling domain to the tumor hemisphere (main analysis only)
 restrict_to_tumor_hemisphere <- TRUE
 
-# landmark: "trough" for ADC, "peak" for all other metrics
-landmark_type <- function(metric) if (metric == "adc") "trough" else "peak"
-
-# initial NAWM tolerance and widening step, in metric units
-nawm_tol_start <- c(adc = 2e-5, fa = 0.05, R2s = 1.5, QSM = 0.002, ChiDia = 0.002, ChiPara = 0.002)
-nawm_tol_step  <- c(adc = 2e-5, fa = 0.01, R2s = 0.5, QSM = 0.001, ChiDia = 0.001, ChiPara = 0.001)
+# landmark tolerance: widened at most this many times (start and step: metric_table)
 nawm_tol_max_steps <- 5
 
 # [VARIANT] sensitivity analyses (run with n_bootstrap <- 0)
@@ -136,11 +133,15 @@ recompute <- FALSE
 
 # ================================ SETUP =======================================
 
+unknown <- setdiff(metrics, metric_table$metric)
+if (length(unknown)) stop("metrics missing from metric_table: ", paste(unknown, collapse = ", "))
+
 run_tag <- sprintf("g%s_tol%s_blk%smm_t2h%d", smoothing_penalty, tol_scale, block_size_mm, t2h_perturb_voxels)
 voxel_cache <- file.path(output_dir, "voxel_cache")
 fit_cache   <- file.path(output_dir, sprintf("fit_cache_%s_B%d", run_tag, n_bootstrap))
 dir.create(voxel_cache, recursive = TRUE, showWarnings = FALSE)
 dir.create(fit_cache,   recursive = TRUE, showWarnings = FALSE)
+set.seed(1)   # reproducible k-index check and bootstrap
 options(future.globals.maxSize = 16 * 1024^3)
 if (n_workers > 1) plan(multisession, workers = n_workers) else plan(sequential)
 
@@ -330,8 +331,8 @@ morans_i <- function(dat, resid) {
 # ============================ ONE PARTICIPANT =================================
 
 analyse_participant <- function(subject, metric, map) {
-  tol  <- list(start = nawm_tol_start[[metric]] * tol_scale, step = nawm_tol_step[[metric]] * tol_scale)
-  type <- landmark_type(metric)
+  tol  <- list(start = info(metric, "tol_start") * tol_scale, step = info(metric, "tol_step") * tol_scale)
+  type <- info(metric, "landmark")
   id   <- data.table(participant = subject, metric = metric, map = map, run_tag = run_tag)
 
   dat <- extract_voxels_cached(subject, metric, map)

@@ -44,12 +44,14 @@ INPUT (BIDS-derivatives layout, diffusion space, 1 mm grid)
         sub-<id>_space-dwi_desc-tumor_dseg.nii.gz         tumor segmentation (TUMOR_LABELS);
                                                           seeds = CET + necrosis
         sub-<id>_space-dwi_label-NAWM_mask.nii.gz         thresholded FAST white matter
-        sub-<id>_space-dwi_label-deepGM_mask.nii.gz       FSL FIRST deep gray matter (excluded)
+        sub-<id>_space-dwi_label-deepGM_mask.nii.gz       deep gray matter, excluded (optional)
         sub-<id>_space-dwi_label-CETmirrored_mask.nii.gz  contralateral control only
         sub-<id>_space-dwi_label-contrahemi_mask.nii.gz   contralateral control only
     derivatives/qmri/sub-<id>/dwi/
-        sub-<id>_space-dwi_model-tensor_param-ad_dwimap.nii.gz   axial diffusivity (lambda1)
-        sub-<id>_space-dwi_model-csd_param-peaks_dwimap.nii.gz   two largest FOD peaks (6 volumes)
+        sub-<id>_space-dwi_model-tensor_param-ad_dwimap.nii.gz   axial diffusivity (weighted maps only)
+        sub-<id>_space-dwi_model-csd_param-peaks_dwimap.nii.gz   two largest FOD peaks, 6 volumes
+                                                                 (anisotropic maps only)
+    The output maps take the grid and orientation of the tumor segmentation.
 
 OUTPUT
     derivatives/distancemaps/sub-<id>/dwi/sub-<id>_space-dwi_desc-<map>_distance.nii.gz
@@ -169,7 +171,8 @@ def output_file(subject, map_name):
 def distance_map(subject, map_name):
     spec = MAPS[map_name]
     mask = lambda label: load(deriv("masks", subject, f"label-{label}_mask")) > 0
-    tumor = np.rint(load(deriv("masks", subject, "desc-tumor_dseg")))
+    tumor_file = deriv("masks", subject, "desc-tumor_dseg")
+    tumor = np.rint(load(tumor_file))
     cet = np.isin(tumor, [TUMOR_LABELS["necrosis"], TUMOR_LABELS["cet"]])   # CET + necrosis
     lesion = np.isin(tumor, list(TUMOR_LABELS.values()))                    # CET + necrosis + T2H
 
@@ -181,13 +184,16 @@ def distance_map(subject, map_name):
         seeds = binary_dilation(seeds, generate_binary_structure(3, 1), iterations=spec["seed_dilation"])
 
     # propagation domain: NAWM + lesion, without deep gray matter
-    domain = (mask("NAWM") | lesion) & ~mask("deepGM")
+    domain = mask("NAWM") | lesion
+    if os.path.exists(deriv("masks", subject, "label-deepGM_mask")):
+        domain &= ~mask("deepGM")
+    else:
+        print(f"{subject}: no deep gray matter mask, nothing excluded")
     if spec.get("contralateral"):
         domain &= mask("contrahemi")
 
     # propagation cost
-    ad_file = deriv("qmri", subject, "model-tensor_param-ad_dwimap")
-    d = speed(load(ad_file), domain) if spec["weighted"] else 1.0
+    d = speed(load(deriv("qmri", subject, "model-tensor_param-ad_dwimap")), domain) if spec["weighted"] else 1.0
     hfm_input = {
         "arrayOrdering": "RowMajor",
         "dims": np.array(domain.shape),
@@ -211,7 +217,7 @@ def distance_map(subject, map_name):
 
     out = output_file(subject, map_name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    nib.save(nib.Nifti1Image(T, nib.load(ad_file).affine), out)
+    nib.save(nib.Nifti1Image(T, nib.load(tumor_file).affine), out)
     print("saved:", out)
 
 # ================================== MAIN =====================================

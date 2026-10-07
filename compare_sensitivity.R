@@ -83,6 +83,7 @@ figures_dir <- file.path(results_dir, "figures")
 
 metric_label <- c(R2s = "bold(R2^'*')~(s^-1)", QSM = "bold(QSM)~(ppm)", ChiDia = "bold(chi[dia])~(ppm)",
                   ChiPara = "bold(chi[para])~(ppm)", adc = "bold(ADC)~(10^-3~mm^2/s)", fa = "bold(FA)")
+# metrics without an entry are labeled with their code
 
 result_file <- function(metric, run, type)
   file.path(results_dir, sprintf("%s_%s_%s_%s.csv", metric, run$map, run$run_tag, type))
@@ -240,7 +241,8 @@ if (run_contralateral) {
   # ---- figure ----------------------------------------------------------------
   pl <- copy(curves)
   pl[metric == "adc", c("mean", "ci_lo", "ci_hi") := .(mean * 1e3, ci_lo * 1e3, ci_hi * 1e3)]   # 10^-3 mm²/s
-  pl[, metric := factor(metric_label[metric], levels = metric_label[metrics])]
+  labels <- setNames(ifelse(metrics %in% names(metric_label), metric_label[metrics], sprintf('bold("%s")', metrics)), metrics)
+  pl[, metric := factor(labels[metric], levels = labels)]
   side_lab <- c(Ipsilateral = sprintf("Ipsilateral%s (tumor seeds)", if (ipsilateral_voxels == "nawm") " NAWM" else ""),
                 Contralateral = "Contralateral (mirrored seeds)")
   pl[curve != "Difference", side := factor(side_lab[curve], levels = side_lab)]
