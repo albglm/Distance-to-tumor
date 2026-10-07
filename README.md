@@ -12,11 +12,14 @@ analysis can be inspected and applied to other datasets.
 | Step | Script | Output |
 |---|---|---|
 | 1. Distance maps (diffusion space) | `distance_maps.py` | `derivatives/distancemaps/sub-*/dwi/*_distance.nii.gz` |
-| 2. Registration of the distance maps to GRE space (ANTs, affine, linear interpolation) and 2-voxel erosion of the finite-distance mask | — | `derivatives/distancemaps/sub-*/anat/*_distance.nii.gz` |
-| 3. GAM profiles, landmark, local gradient | `gam_distance_profiles.R` | `derivatives/distance_profiles/*.csv` |
-| 4. Figures | `plot_profiles.R` | population profiles, participant profiles, example participants |
-| 5. Summary tables | `summarize_profiles.R` | fit diagnostics and landmark/gradient summary per metric and map |
-| 6. Sensitivity analyses and contralateral control (optional) | `compare_sensitivity.R` | landmark agreement of sensitivity runs with the main analysis; ipsilateral vs contralateral profiles and fit statistics |
+| 2. GAM profiles, landmark, local gradient | `gam_distance_profiles.R` | `derivatives/distance_profiles/*.csv` |
+| 3. Figures | `plot_profiles.R` | population profiles, participant profiles, example participants |
+| 4. Summary tables | `summarize_profiles.R` | fit diagnostics and landmark/gradient summary per metric and map |
+| 5. Sensitivity analyses and contralateral control (optional) | `compare_sensitivity.R` | landmark agreement of sensitivity runs with the main analysis; ipsilateral vs contralateral profiles and fit statistics |
+
+Each qMRI map must be in the same space as its distance map and masks; any
+registration between diffusion and other image spaces is done by the user
+beforehand (see Input).
 
 `distance_maps.py` solves the eikonal equation with the Hamiltonian Fast
 Marching library from all CET voxels, within NAWM plus the lesion and
@@ -35,9 +38,8 @@ uncertainty (spatial block bootstrap), fit diagnostics and population curves.
 - Python 3 with `numpy`, `nibabel`, `scipy`, and the
   [HamiltonFastMarching](https://github.com/Mirebeau/HamiltonFastMarching)
   library compiled locally (step 1)
-- ANTs (step 2)
-- R ≥ 4.4 with `RNifti`, `data.table`, `mgcv`, `future`, `furrr` (step 3) and
-  `ggplot2`, `patchwork` (step 4)
+- R ≥ 4.4 with `RNifti`, `data.table`, `mgcv`, `future`, `furrr` (step 2) and
+  `ggplot2`, `patchwork` (steps 3-5)
 - Preprocessed images per participant (see Input)
 
 ```
@@ -50,7 +52,11 @@ Rscript -e 'install.packages(c("RNifti", "data.table", "mgcv", "future", "furrr"
 The scripts expect a BIDS-derivatives layout. All images of one participant
 must be in the space of the metric map: GRE-derived metrics in GRE space
 (`anat`, `space-gre`), ADC and FA in diffusion space (`dwi`, `space-dwi`), so
-masks and distance maps are needed in both spaces.
+masks and distance maps are needed in both spaces. `distance_maps.py` writes
+the distance maps in diffusion space; bringing them (and the masks) into the
+space of the other qMRI maps is left to the user, with any registration tool.
+Segmentations and masks must be resampled with nearest-neighbour
+interpolation.
 
 ```
 <bids_root>/
@@ -80,8 +86,7 @@ The tumor segmentation uses the BraTS 2023 labels (1 necrosis, 2 T2H/edema,
 3 CET); other label values are set in `TUMOR_LABELS` (`distance_maps.py`) and
 `tumor_labels` (`gam_distance_profiles.R`), e.g. `cet = 4` for BraTS 2021. The
 seeds of the distance maps are CET + necrosis, and the T2H is the lesion
-outside them. Registered segmentations must use nearest-neighbour
-interpolation.
+outside them.
 
 Distance maps (`desc-` label): `iso` (isotropic), `isoweighted` (isotropic
 weighted, primary), `aniso` (anisotropic), `anisoweighted` (anisotropic
@@ -112,10 +117,10 @@ to change for a different folder structure.
 
 ```
 python distance_maps.py                      # step 1, all included participants
-Rscript gam_distance_profiles.R              # step 3, all included participants
-Rscript plot_profiles.R                      # step 4
-Rscript summarize_profiles.R                 # step 5
-Rscript compare_sensitivity.R                # step 6, after the sensitivity / contralateral runs
+Rscript gam_distance_profiles.R              # step 2, all included participants
+Rscript plot_profiles.R                      # step 3
+Rscript summarize_profiles.R                 # step 4
+Rscript compare_sensitivity.R                # step 5, after the sensitivity / contralateral runs
 
 python distance_maps.py sub-P001             # one or more participants only
 Rscript gam_distance_profiles.R sub-P001
@@ -141,11 +146,11 @@ and running the scripts again:
 | Analysis | Settings |
 |---|---|
 | Main analysis | defaults |
-| Contralateral control | step 1 with `MAPS_TO_RUN = ["contraisoweighted"]`; step 3 with `maps <- "contraisoweighted"`, `contralateral <- TRUE` |
+| Contralateral control | step 1 with `MAPS_TO_RUN = ["contraisoweighted"]`; step 2 with `maps <- "contraisoweighted"`, `contralateral <- TRUE` |
 | Smoothing sensitivity | `smoothing_penalty <- 1.0`, `n_bootstrap <- 0` |
 | Landmark-tolerance sensitivity | `tol_scale <- 0.5` or `2`, `n_bootstrap <- 0` |
 | T2H-boundary sensitivity | `t2h_perturb_voxels <- -1L` or `1L`, `n_bootstrap <- 0` |
-| CET-boundary sensitivity | step 1 with `MAPS_TO_RUN = ["isoweightedcetdil"]`; step 3 with `maps <- "isoweightedcetdil"`, `n_bootstrap <- 0` |
+| CET-boundary sensitivity | step 1 with `MAPS_TO_RUN = ["isoweightedcetdil"]`; step 2 with `maps <- "isoweightedcetdil"`, `n_bootstrap <- 0` |
 
 Each run is saved under its own `run_tag`, so runs do not overwrite each other.
 `compare_sensitivity.R` then compares the landmarks of the chosen runs (setting
