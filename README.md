@@ -217,3 +217,15 @@ For each metric × distance map × run, in `<bids_root>/derivatives/distance_pro
   landmark.
 - **Uncertainty:** spatial block bootstrap (5 × 5 × 5 mm cubes, B = 100),
   conditional on the segmentation and distance map.
+
+## Citation
+
+If you use this code, please cite the accompanying article:
+
+> [Authors]. [Title]. [Journal] [Year]. doi:[DOI]
+
+and the Hamiltonian Fast Marching library used for the distance maps:
+
+- J.-M. Mirebeau, J. Portegies. Hamiltonian Fast Marching: a numerical solver
+  for anisotropic and non-holonomic eikonal PDEs. *Image Processing On Line*
+  2019;9:47–93. doi:[10.5201/ipol.2019.227](https://doi.org/10.5201/ipol.2019.227)
