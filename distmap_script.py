@@ -1,216 +1,205 @@
 """
-GEODESIC DISTANCE MAP COMPUTATION, via the Hamiltonian Fast Marching method
-==============================================================================
-WHAT IT DOES
-    For each patient, computes a "distance map": for every voxel (3D pixel)
-    in a chosen brain region, how far it is from a chosen starting region. This
-    isn't always straight-line distance -- how "far" a voxel counts as
-    being can depend on the tissue it has to travel through (see map
-    variants below). Used downstream by the GAM landmark analysis script.
+Geodesic distance-to-tumor maps with Hamiltonian Fast Marching (HFM)
+=====================================================================
 
-MAP VARIANTS (set below)
-    isotropic              - uniform cost everywhere -> true distance in mm
-    isotropic, weighted     - cost scaled by axial diffusivity
-    anisotropic             - cheaper to travel along the local fiber
-                               direction than across it
-    anisotropic, weighted   - anisotropic cost, also scaled by diffusivity
+For every participant, computes the geodesic distance of each voxel of the
+propagation domain from the contrast-enhancing tumor (CET), in diffusion space.
 
-SEED AND REGION INPUTS ARE JUST MASKS
-    Where the distance is measured from, and what tissue it's allowed to
-    travel through, are both plain binary masks (see INPUT FILES below) --
-    point them at whichever regions you want. E.g. `seed_mask_file` can be
-    tumor core or tumor including edema; `allowed_region_mask_file` can
-    be white matter near the tumor or a whole-brain mask; anything not in
-    `allowed_region_mask_file` (or explicitly in `excluded_region_mask_file`,
-    if used) is off-limits to the propagating front.
+Distance maps (names = desc- label of the output file, used by
+gam_distance_profiles.R):
+    iso                 isotropic: uniform cost, distance in mm
+    isoweighted         isotropic, cost scaled by axial diffusivity (primary map)
+    aniso               anisotropic: cheaper along the main fiber direction
+    anisoweighted       anisotropic and scaled by axial diffusivity
+    contraisoweighted   isoweighted, seeded from the mirrored CET within the
+                        contralateral hemisphere (contralateral control)
+    isoweightedcetdil   isoweighted, seeded from the CET dilated by 2 voxels
+                        (CET-boundary sensitivity analysis)
 
-DEPENDENCIES
-    Python: numpy, nibabel.
-    External toolbox: HamiltonFastMarching, installed locally (https://github.com/Mirebeau/HamiltonFastMarching/tree/master).
- 
-REQUIRED INPUT FILES (per subject, NIfTI)
-    A seed mask, an allowed-region mask, an optional excluded-region mask,
-    a reference DWI (b=0) image, normalized FOD peaks, and a normalized
-    axial-diffusivity ("1val") map, in the same space. See INPUT FILES below for details and
-    which ones are only needed for certain MAP_TYPE/WEIGHTED settings.
+Equations (see Methods):
+    weighting   d = lambda1 / lambda_max + eps; voxels with lambda1 outside
+                (0, lambda_max] get d = eps (effectively impassable)
+    isotropic   |grad T| = 1 / F,  F = 1 (iso) or F = d (isoweighted)
+    anisotropic grad T' D grad T = 1,  D = beta I + (alpha^2 - beta^2) u u'
+                u = first FOD peak direction, r = second/first peak amplitude,
+                beta = max(0.5 log2(1 + r), 1e-8), alpha = 1 - beta;
+                alpha and beta multiplied by d in anisoweighted
+
+HOW TO RUN
+    1. Edit SETTINGS below (paths, maps to compute).
+    2. python distance_maps.py                      all included participants
+       python distance_maps.py sub-P001 sub-P002    only these participants
+    Existing maps are skipped, so an interrupted run restarts where it stopped;
+    set RECOMPUTE = True to overwrite them.
+
+INPUT (BIDS-derivatives layout, diffusion space, 1 mm grid)
+    <bids_root>/participants.tsv                       participant_id, include
+    derivatives/masks/sub-<id>/dwi/
+        sub-<id>_space-dwi_label-CET_mask.nii.gz          CET + necrosis (seeds)
+        sub-<id>_space-dwi_label-lesion_mask.nii.gz       CET + necrosis + T2H
+        sub-<id>_space-dwi_label-NAWM_mask.nii.gz         thresholded FAST white matter
+        sub-<id>_space-dwi_label-deepGM_mask.nii.gz       FSL FIRST deep gray matter (excluded)
+        sub-<id>_space-dwi_label-CETmirrored_mask.nii.gz  contralateral control only
+        sub-<id>_space-dwi_label-contrahemi_mask.nii.gz   contralateral control only
+    derivatives/qmri/sub-<id>/dwi/
+        sub-<id>_space-dwi_model-tensor_param-ad_dwimap.nii.gz   axial diffusivity (lambda1)
+        sub-<id>_space-dwi_model-csd_param-peaks_dwimap.nii.gz   two largest FOD peaks (6 volumes)
 
 OUTPUT
-    <derivatives_dir>/DWI/<subject>/distancemap_core_<map_tag>_dwi.nii.gz
+    derivatives/distancemaps/sub-<id>/dwi/sub-<id>_space-dwi_desc-<map>_distance.nii.gz
+
+Requirements: Python 3 with numpy, nibabel, scipy; the HamiltonFastMarching
+library (https://github.com/Mirebeau/HamiltonFastMarching), compiled locally.
 """
 
+import csv
 import os
 import sys
+
+import nibabel as nib
 import numpy as np
-import nibabel as nib  # reads/writes NIfTI (neuroimaging) files
+from scipy.ndimage import binary_dilation, generate_binary_structure
 
-sys.path.append('/toolboxes/HamiltonFastMarching/Interfaces/PythonHFM/ExampleFiles/FileBased')
-import FileIO
+# ================================ SETTINGS ===================================
 
-# ============================== USER SETTINGS ================================
+bids_root = "/path/to/bids"
+hfm_python_dir = "/path/to/HamiltonFastMarching/Interfaces/PythonHFM/ExampleFiles/FileBased"
+hfm_binary_dir = "/path/to/HamiltonFastMarching/bin"
 
-MAP_TYPE = "isotropic"   # "isotropic" or "anisotropic" -- see map variants above
-WEIGHTED = False          # True: scale cost by axial diffusivity; False: unweighted
+MAPS_TO_RUN = ["iso", "isoweighted", "aniso", "anisoweighted"]
+# contralateral control: ["contraisoweighted"]; CET sensitivity: ["isoweightedcetdil"]
 
-subject         = "sub-P001"
-derivatives_dir  = "/data/project/TP1/derivatives"
-hfm_binary_dir    = "/HamiltonFastMarching-master/bin"
-
-VAL_MIN, VAL_MAX = 0, 0.004   # expected range of the axial-diffusivity map, for normalization
-EPSILON = 1e-6                 # tiny constant to avoid divide-by-zero / exact-zero cost
-
-# ================================ INPUT FILES =================================
-
-seed_mask_file          = os.path.join(derivatives_dir, f"segm/{subject}/segm/tumor_core_dwi_bin.nii.gz")
-    # Voxels > 0 here are the seeds the distance is measured from.
-    # Point this at any binary mask instead -- e.g. tumor core or tumor including edema
-
-allowed_region_mask_file = os.path.join(derivatives_dir, f"DWI/{subject}/reg/t1_fast_pve_2_dwi_thr_+edema.nii.gz")
-    # Voxels > 0 here are the tissue the front is allowed to travel through.
-    # Point this at any binary mask instead -- e.g. white matter mask or whole-brain mask
-
-excluded_region_mask_file = os.path.join(derivatives_dir, f"GRE/{subject}/reg/t1_first_all_fast_firstseg_dwi_bin.nii.gz")
-    # Optional: voxels > 0 here are removed from allowed_region_mask_file.
-    # Set to None to skip this and use allowed_region_mask_file as-is.
-
-reference_b0_file      = os.path.join(derivatives_dir, f"DWI/{subject}/{subject}_b0_masked.nii")  # for output grid size/orientation
-fod_peaks_file         = os.path.join(derivatives_dir, f"DWI/{subject}/{subject}_wmfod_3tissues_norm_peaks.nii.gz")  # fiber orientation distribution (FOD) peaks; needed if MAP_TYPE = "anisotropic"
-axial_diffusivity_file = os.path.join(derivatives_dir, f"DWI/{subject}/{subject}_1val.nii.gz")  # axial diffusivity (lambda1) map; needed if WEIGHTED = True
-
-map_tag = MAP_TYPE + ("_weighted" if WEIGHTED else "")
-out_file = os.path.join(derivatives_dir, f"DWI/{subject}/distancemap_core_{map_tag}_dwi.nii.gz")
-
-def build_riemannian_metric(alpha, beta, Vx, Vy, Vz, dual=False):
-    """
-    Builds the per-voxel directional travel-cost tensor used for
-    anisotropic propagation: an ellipsoid per voxel, cheap (`alpha`) along
-    the local fiber direction (Vx,Vy,Vz), more costly (`beta`) across it.
-    `dual=True` returns the convention expected by the solver's
-    'dualMetric' input.
-    """
-    v_norm2 = Vx**2 + Vy**2 + Vz**2
-    c = np.zeros_like(v_norm2, dtype=float)
-    valid = v_norm2 > 0
-
-    exponent = 2 if dual else -2
-    c[valid] = (alpha[valid]**exponent - beta[valid]**exponent) / v_norm2[valid]
-
-    metric = np.empty((*Vx.shape, 6), dtype=float)  # 6 = independent entries of a symmetric 3x3 tensor
-    metric[..., 0] = c * Vx**2 + beta
-    metric[..., 1] = c * Vx * Vy
-    metric[..., 2] = c * Vy**2 + beta
-    metric[..., 3] = c * Vx * Vz
-    metric[..., 4] = c * Vy * Vz
-    metric[..., 5] = c * Vz**2 + beta
-
-    # A handful of voxels can end up with an invalid (non-positive) cost
-    # ellipsoid due to numerical edge cases; replace those with a tiny,
-    # harmless, direction-independent cost.
-    eps = 1e-6
-    min_eig = np.minimum(beta, beta + c * v_norm2)
-    bad = min_eig <= eps * 0.5
-    if bad.any():
-        print(f"Warning: {bad.sum()} voxels have an invalid cost ellipsoid; using a fallback value.")
-        metric[bad, :] = np.array([eps, 0.0, eps, 0.0, 0.0, eps])
-
-    return metric
-
-
-def load_normalized_diffusivity(path, mask, val_min=VAL_MIN, val_max=VAL_MAX, epsilon=EPSILON):
-    """Loads the axial-diffusivity map and rescales in-mask, in-range voxels to (0, 1]."""
-    val_data = np.nan_to_num(nib.load(path).get_fdata(), nan=0, posinf=0, neginf=0)
-    val_norm = np.full_like(val_data, epsilon)
-    valid = mask.astype(bool) & (val_data > 0) & (val_data >= val_min) & (val_data <= val_max)
-    val_norm[valid] = (val_data[valid] - val_min) / (val_max - val_min) + epsilon
-    return val_norm
-
-
-def load_fod_direction(path, epsilon=EPSILON):
-    """Loads the FOD peaks file and returns the dominant fiber direction per voxel, as a unit vector."""
-    fod_data = np.nan_to_num(nib.load(path).get_fdata(), nan=0, posinf=0, neginf=0)
-    Vx, Vy, Vz = fod_data[..., 0], fod_data[..., 1], fod_data[..., 2]
-    v_norm = np.sqrt(Vx**2 + Vy**2 + Vz**2) + epsilon
-    return Vx / v_norm, Vy / v_norm, Vz / v_norm
-
-
-def get_fod_anisotropy_ratio(path, epsilon=EPSILON):
-    """
-    Loads the FOD peaks file and returns the second-peak / first-peak
-    strength ratio per voxel: near 0 = one clear fiber direction, higher =
-    crossing fibers / more isotropic. Sets how elongated each voxel's cost
-    ellipsoid is (see build_riemannian_metric).
-    """
-    fod_data = np.nan_to_num(nib.load(path).get_fdata(), nan=0, posinf=0, neginf=0)
-    fod_data = fod_data / (np.nanmax(fod_data) + epsilon)
-    first_mag = np.linalg.norm(fod_data[:, :, :, :3], axis=-1)
-    second_mag = np.linalg.norm(fod_data[:, :, :, 3:6], axis=-1)
-    return np.divide(second_mag, first_mag, where=(first_mag > epsilon))
-
-
-print("Processing:", subject, "| map type:", map_tag)
-
-# --- seeds: where the distance is measured from -----------------------------
-seed_data = nib.load(seed_mask_file).get_fdata()
-seed_positions = np.array(np.where(seed_data > 0)).T
-
-# --- walls: which tissue the front is allowed to travel through -------------
-allowed_region = nib.load(allowed_region_mask_file).get_fdata().astype(bool)
-if excluded_region_mask_file is not None:
-    excluded_region = nib.load(excluded_region_mask_file).get_fdata().astype(bool)
-    allowed_region = allowed_region & ~excluded_region
-walls = ~allowed_region  # solver expects excluded voxels, not allowed ones
-
-# --- reference geometry, so the output aligns with the subject's other scans ---
-reference_img = nib.load(reference_b0_file)
-grid_shape = reference_img.get_fdata().shape
-reference_affine = reference_img.affine
-
-# --- build the propagation cost: speed field (isotropic) or directional
-#     cost tensor (anisotropic), scaled by diffusivity if WEIGHTED -------
-if WEIGHTED:
-    diffusivity_norm = load_normalized_diffusivity(axial_diffusivity_file, allowed_region)
-
-if MAP_TYPE == "isotropic":
-    speed = diffusivity_norm if WEIGHTED else 1  # 1 = uniform cost -> true geodesic distance in mm
-    solver_name = "FileHFM_Isotropic3"
-
-elif MAP_TYPE == "anisotropic":
-    Vx, Vy, Vz = load_fod_direction(fod_peaks_file)
-    anisotropy_ratio = get_fod_anisotropy_ratio(fod_peaks_file)
-
-    # beta = cost across the fiber direction (grows with local isotropy); alpha = cost along it (kept low).
-    beta = np.clip(np.log1p(anisotropy_ratio) / np.log1p(1) * 0.5, 1e-8, None)
-    alpha = np.nan_to_num(1 - beta, nan=0, posinf=0, neginf=0)
-    beta = np.nan_to_num(beta, nan=0, posinf=0, neginf=0)
-
-    if WEIGHTED:
-        alpha = alpha * diffusivity_norm
-        beta = beta * diffusivity_norm
-
-    dual_metric = build_riemannian_metric(alpha, beta, Vx, Vy, Vz, dual=True)
-    solver_name = "FileHFM_Riemann3"
-
-else:
-    raise ValueError(f'MAP_TYPE must be "isotropic" or "anisotropic", got: {MAP_TYPE}')
-
-hfm_input = {
-    'arrayOrdering': 'RowMajor',
-    'dims': np.array(grid_shape),
-    'origin': np.array([0, 0, 0]),
-    'gridScale': 1.0,
-    'seeds': seed_positions,
-    'walls': walls,
-    'exportValues': 1,
-    'sndOrder': 1,
+MAPS = {
+    "iso":               dict(anisotropic=False, weighted=False),
+    "isoweighted":       dict(anisotropic=False, weighted=True),
+    "aniso":             dict(anisotropic=True,  weighted=False),
+    "anisoweighted":     dict(anisotropic=True,  weighted=True),
+    "contraisoweighted": dict(anisotropic=False, weighted=True, contralateral=True),
+    "isoweightedcetdil": dict(anisotropic=False, weighted=True, cet_dilation=2),
 }
-if MAP_TYPE == "isotropic":
-    hfm_input['speed'] = speed
-else:
-    hfm_input['dualMetric'] = dual_metric
 
-hfm_output = FileIO.WriteCallRead(hfm_input, solver_name, binary_dir=hfm_binary_dir)
+RECOMPUTE = False   # True = overwrite existing distance maps
 
-# =============================== SAVE OUTPUT ===================================
+LAMBDA_MAX = 4e-3   # mm^2/s, upper bound of the axial-diffusivity normalization
+EPSILON = 1e-6
 
-distance_map = hfm_output["values"]
-nib.save(nib.Nifti1Image(distance_map, affine=reference_affine), out_file)
-print("saved:", out_file)
+if not os.path.isdir(hfm_binary_dir):
+    sys.exit(f"HFM binaries not found: {hfm_binary_dir} (set hfm_binary_dir in SETTINGS)")
+sys.path.append(hfm_python_dir)
+import FileIO  # noqa: E402  (HFM file interface)
+
+# ================================ HELPERS ====================================
+
+def deriv(pipeline, subject, name):
+    return os.path.join(bids_root, "derivatives", pipeline, subject, "dwi",
+                        f"{subject}_space-dwi_{name}.nii.gz")
+
+
+def load(path):
+    return np.nan_to_num(nib.load(path).get_fdata(), nan=0, posinf=0, neginf=0)
+
+
+def normalized_diffusivity(path, domain):
+    """d = lambda1 / lambda_max + eps inside the domain; eps elsewhere and outside (0, lambda_max]."""
+    lam = load(path)
+    d = np.full_like(lam, EPSILON)
+    ok = domain & (lam > 0) & (lam <= LAMBDA_MAX)
+    d[ok] = lam[ok] / LAMBDA_MAX + EPSILON
+    return d
+
+
+def fod_direction_and_ratio(path):
+    """Unit vector of the first FOD peak and second-to-first peak amplitude ratio r."""
+    peaks = load(path)
+    first, second = peaks[..., 0:3], peaks[..., 3:6]
+    first_amp = np.linalg.norm(first, axis=-1)
+    second_amp = np.linalg.norm(second, axis=-1)
+    u = first / (first_amp[..., None] + EPSILON)
+    r = np.divide(second_amp, first_amp, out=np.zeros_like(first_amp), where=first_amp > EPSILON)
+    return u, r
+
+
+def dual_metric(alpha, beta, u):
+    """D = beta I + (alpha^2 - beta^2) u u', stored as the 6 entries of a symmetric 3x3 tensor."""
+    ux, uy, uz = u[..., 0], u[..., 1], u[..., 2]
+    norm2 = ux**2 + uy**2 + uz**2
+    c = np.zeros_like(norm2)
+    ok = norm2 > 0
+    c[ok] = (alpha[ok]**2 - beta[ok]**2) / norm2[ok]
+    D = np.stack([c * ux**2 + beta, c * ux * uy, c * uy**2 + beta,
+                  c * ux * uz, c * uy * uz, c * uz**2 + beta], axis=-1)
+    # regularize voxels whose smallest eigenvalue is ~0
+    bad = np.minimum(beta, beta + c * norm2) <= 0.5 * EPSILON
+    D[bad] = [EPSILON, 0.0, EPSILON, 0.0, 0.0, EPSILON]
+    return D
+
+# ============================ ONE DISTANCE MAP ===============================
+
+def output_file(subject, map_name):
+    return os.path.join(bids_root, "derivatives", "distancemaps", subject, "dwi",
+                        f"{subject}_space-dwi_desc-{map_name}_distance.nii.gz")
+
+
+def distance_map(subject, map_name):
+    spec = MAPS[map_name]
+    mask = lambda label: load(deriv("masks", subject, f"label-{label}_mask")) > 0
+
+    # seeds
+    seeds = mask("CETmirrored") if spec.get("contralateral") else mask("CET")
+    if spec.get("cet_dilation"):
+        seeds = binary_dilation(seeds, generate_binary_structure(3, 1), iterations=spec["cet_dilation"])
+
+    # propagation domain: NAWM + lesion, without deep gray matter
+    domain = (mask("NAWM") | mask("lesion")) & ~mask("deepGM")
+    if spec.get("contralateral"):
+        domain &= mask("contrahemi")
+
+    # propagation cost
+    ad_file = deriv("qmri", subject, "model-tensor_param-ad_dwimap")
+    d = normalized_diffusivity(ad_file, domain) if spec["weighted"] else 1.0
+    hfm_input = {
+        "arrayOrdering": "RowMajor",
+        "dims": np.array(domain.shape),
+        "origin": np.array([0, 0, 0]),
+        "gridScale": 1.0,
+        "seeds": np.argwhere(seeds),
+        "walls": ~domain,
+        "exportValues": 1,
+        "sndOrder": 1,
+    }
+    if spec["anisotropic"]:
+        u, r = fod_direction_and_ratio(deriv("qmri", subject, "model-csd_param-peaks_dwimap"))
+        beta = np.clip(0.5 * np.log2(1 + r), 1e-8, None)
+        alpha = 1 - beta
+        hfm_input["dualMetric"] = dual_metric(alpha * d, beta * d, u)
+        solver = "FileHFM_Riemann3"
+    else:
+        hfm_input["speed"] = d
+        solver = "FileHFM_Isotropic3"
+
+    T = FileIO.WriteCallRead(hfm_input, solver, binary_dir=hfm_binary_dir)["values"]
+
+    out = output_file(subject, map_name)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    nib.save(nib.Nifti1Image(T, nib.load(ad_file).affine), out)
+    print("saved:", out)
+
+# ================================== MAIN =====================================
+
+if __name__ == "__main__":
+    subjects = sys.argv[1:]
+    if not subjects:
+        with open(os.path.join(bids_root, "participants.tsv")) as f:
+            subjects = [row["participant_id"] for row in csv.DictReader(f, delimiter="\t")
+                        if row["include"] == "1"]
+
+    for subject in subjects:
+        for map_name in MAPS_TO_RUN:
+            if not RECOMPUTE and os.path.exists(output_file(subject, map_name)):
+                print(f"{subject} {map_name}: exists, skipped")
+                continue
+            print(f"{subject} {map_name}: computing")
+            try:
+                distance_map(subject, map_name)
+            except Exception as e:  # missing file, solver error: report and continue
+                print(f"{subject} {map_name}: FAILED ({e})")
