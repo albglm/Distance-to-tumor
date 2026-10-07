@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.Rhistory
+.RData
+*.nii
+*.nii.gz
+derivatives/

@@ -1,83 +1,192 @@
-# Peritumoral Distance-Resolved qMRI Analysis
+# Distance-to-tumor qMRI profiles in glioblastoma
 
-Computes geodesic distance-from-tumor maps from diffusion MRI, then models each
-quantitative MRI (qMRI) metric as a smooth function of that distance, per patient, to
-locate a data-driven landmark distance at which the metric recovers toward
-normal-appearing white matter (NAWM) values. Supports both single-timepoint analysis
-and longitudinal comparison across timepoints (e.g. pre- vs. post-treatment), with plotting scripts to
-visualize per-patient fits, cohort-level trends, and group comparisons.
+Code for modeling quantitative MRI (qMRI) metrics as continuous functions of
+geodesic distance from the contrast-enhancing tumor (CET), as described in the
+accompanying manuscript.
 
-## Structure
+Patient data cannot be shared for privacy reasons; the code is provided so the
+analysis can be inspected and applied to other datasets.
 
-One shared first step, then two independent analysis paths — use whichever matches
-your data (or both):
+## Pipeline
 
-```
-distmap_script.py
-        |
-        +-- gam_landmark_analysis.R --------- gam_figures.R          (single timepoint)
-        +-- gam_landmark_analysis_long.R --- gam_figures_long.R (longitudinal)
-```
+| Step | Script | Output |
+|---|---|---|
+| 1. Distance maps (diffusion space) | `distance_maps.py` | `derivatives/distancemaps/sub-*/dwi/*_distance.nii.gz` |
+| 2. Registration of the distance maps to GRE space (ANTs, affine, linear interpolation) and 2-voxel erosion of the finite-distance mask | — | `derivatives/distancemaps/sub-*/anat/*_distance.nii.gz` |
+| 3. GAM profiles, landmark, local gradient | `gam_distance_profiles.R` | `derivatives/distance_profiles/*.csv` |
+| 4. Figures | `plot_profiles.R` | population profiles, participant profiles, example participants |
+| 5. Summary tables | `summarize_profiles.R` | fit diagnostics and landmark/gradient summary per metric and map |
+| 6. Sensitivity analyses and contralateral control (optional) | `compare_sensitivity.R` | landmark agreement of sensitivity runs with the main analysis; ipsilateral vs contralateral profiles and fit statistics |
 
-Each of these three pieces is independent in its own right: regenerate distance maps
-with different settings without touching the R scripts, re-run either R analysis
-script across metrics/map variants without recomputing distance maps, and re-run a
-plotting script without redoing the analysis.
+`distance_maps.py` solves the eikonal equation with the Hamiltonian Fast
+Marching library from all CET voxels, within NAWM plus the lesion and
+excluding deep gray matter, for the four map variants (isotropic, isotropic
+weighted by axial diffusivity, anisotropic from FOD peaks, anisotropic
+weighted), the contralateral control (mirrored CET) and the CET-dilation
+sensitivity map. Its header lists the equations and the input files.
 
-### Distance map
-
-**`distmap_script.py`** — Computes a geodesic distance-from-tumor map per patient
-(Hamiltonian Fast Marching). Isotropic/anisotropic, weighted/unweighted variants.
-Feeds into both analysis paths below.
-- In: seed mask, co-registered (+ FOD peaks and axial-diffusivity map for anisotropic/weighted variants)
-- Out: one distance map (NIfTI) per patient per map variant
-
-### Single-timepoint analysis
-
-**`gam_landmark_analysis.R`** — Per patient, fits a smooth curve of metric vs.
-distance, locates the landmark peak/trough nearest NAWM, bootstraps its location,
-compares against simpler models. Loops over metrics and map variants.
-- In: metric map, distance map (from the shared step), BraTS-style tumor segmentation (necrosis / edema / enhancing), white-matter mask — all co-registered
-- Out: one CSV per (metric, map variant), one row per patient: landmark distance, bootstrap CI, curve-fit diagnostics, model comparisons
-
-**`gam_figures.R`** — Builds figures for one metric and one map variant at a
-time: a per-patient grid (fitted curve, NAWM/T2H reference lines, landmark + CI), a
-population overview (all patients' curves plus the cohort median and IQR), and cohort
-boxplots of landmark distance and gradient, optionally split by a subgroup column.
-Reads the results CSV above, and re-extracts voxels from the same NIfTI files only to
-refit each curve for display — no analysis is redone.
-- In: results CSV above, plus the same metric map/distance map/tumor segmentation/white-matter mask used to produce it
-- Out: PDF figures (patient grid, population overview, boxplots)
-
-### Longitudinal comparison
-
-**`gam_landmark_analysis_long.R`** — For patients with two co-registered scans (a
-follow-up visit, before/after any intervention, or any two timepoints), jointly fits a smooth curve
-per timepoint, matches the second landmark to the first, and bootstraps both. Use this
-instead of the single-timepoint script when comparing the same patient across two
-scans. Loops over metrics and map variants.
-- In: metric map, distance map, tumor segmentation, white-matter mask — all at BOTH timepoints, co-registered (distance map/segmentation/mask are typically computed once at the first timepoint and reused for the second)
-- Out: two CSVs per (metric, map variant): one row per patient per timepoint (curve fit + landmark), and one row per patient (change between timepoints)
-
-**`gam_figures_long.R`** — The two-timepoint counterpart to the single-timepoint
-plotting script: a per-patient grid with both timepoints' curves overlaid (landmark +
-CI for each, mismatched correspondences flagged), a population overview across
-timepoints, a paired shift plot (each patient's landmark at each timepoint as a
-connected line), and cohort boxplots of the landmark and gradient shift, optionally
-split by a subgroup column. Reads the two results CSVs above, and re-extracts voxels
-from the same NIfTI files (at both timepoints) only to refit each curve for display.
-- In: per-timepoint and delta results CSVs above, plus the same NIfTI inputs used to produce them, at both timepoints
-- Out: PDF figures (patient grid, population overview, paired shift plot, boxplots)
-
-All scripts also need a participant list file. Exact filenames/paths are placeholders
-in each script's settings — edit to match your data. See each script's header for full
-detail on inputs, settings, and outputs.
+`gam_distance_profiles.R` fits, for every participant, qMRI metric and distance
+map, a generalized additive model (GAM) of metric value against distance, and
+extracts the landmark distance and local gradient. It also computes landmark
+uncertainty (spatial block bootstrap), fit diagnostics and population curves.
 
 ## Requirements
 
-* Python: `numpy`, `nibabel`, plus [HamiltonFastMarching](https://github.com/Mirebeau/HamiltonFastMarching) (external toolbox, installed locally).
-* R: `install.packages(c("RNifti", "data.table", "mgcv", "furrr", "future"))` for the analysis scripts; add `ggplot2` for the plotting scripts.
+- Python 3 with `numpy`, `nibabel`, `scipy`, and the
+  [HamiltonFastMarching](https://github.com/Mirebeau/HamiltonFastMarching)
+  library compiled locally (step 1)
+- ANTs (step 2)
+- R ≥ 4.4 with `RNifti`, `data.table`, `mgcv`, `future`, `furrr` (step 3) and
+  `ggplot2`, `patchwork` (step 4)
+- Preprocessed images per participant (see Input)
 
-## Citation
+```
+pip install numpy nibabel scipy
+Rscript -e 'install.packages(c("RNifti", "data.table", "mgcv", "future", "furrr", "ggplot2", "patchwork"))'
+```
 
-If you use this pipeline, please cite [paper/preprint] and [HamiltonFastMarching](https://github.com/Mirebeau/HamiltonFastMarching).
+## Input
+
+The scripts expect a BIDS-derivatives layout. All images of one participant
+must be in the space of the metric map: GRE-derived metrics in GRE space
+(`anat`, `space-gre`), ADC and FA in diffusion space (`dwi`, `space-dwi`), so
+masks and distance maps are needed in both spaces.
+
+```
+<bids_root>/
+├── participants.tsv                      participant_id, include (1 = analysed)
+└── derivatives/
+    ├── qmri/sub-P001/
+    │   ├── anat/sub-P001_space-gre_R2starmap.nii.gz
+    │   │        sub-P001_space-gre_Chimap.nii.gz                 (QSM)
+    │   │        sub-P001_space-gre_desc-dia_Chimap.nii.gz        (Xdia)
+    │   │        sub-P001_space-gre_desc-para_Chimap.nii.gz       (Xpara)
+    │   └── dwi/ sub-P001_space-dwi_model-tensor_param-adc_dwimap.nii.gz
+    │            sub-P001_space-dwi_model-tensor_param-fa_dwimap.nii.gz
+    │            sub-P001_space-dwi_model-tensor_param-ad_dwimap.nii.gz    axial diffusivity (step 1)
+    │            sub-P001_space-dwi_model-csd_param-peaks_dwimap.nii.gz    two largest FOD peaks (step 1)
+    ├── masks/sub-P001/{anat,dwi}/
+    │        sub-P001_space-<gre|dwi>_desc-tumor_dseg.nii.gz       tumor segmentation: 1 necrosis, 2 T2H, 3 CET
+    │        sub-P001_space-<gre|dwi>_label-NAWM_mask.nii.gz       thresholded FAST white matter
+    │        sub-P001_space-<gre|dwi>_label-tumorhemi_mask.nii.gz  hemisphere of the tumor
+    │        sub-P001_space-dwi_label-deepGM_mask.nii.gz          FSL FIRST deep gray matter
+    │        sub-P001_space-dwi_label-CETmirrored_mask.nii.gz     mirrored CET (contralateral control)
+    │        sub-P001_space-dwi_label-contrahemi_mask.nii.gz      contralateral hemisphere
+    └── distancemaps/sub-P001/{anat,dwi}/
+             sub-P001_space-<gre|dwi>_desc-<map>_distance.nii.gz
+```
+
+The tumor segmentation uses the BraTS 2023 labels (1 necrosis, 2 T2H/edema,
+3 CET); other label values are set in `TUMOR_LABELS` (`distance_maps.py`) and
+`tumor_labels` (`gam_distance_profiles.R`), e.g. `cet = 4` for BraTS 2021. The
+seeds of the distance maps are CET + necrosis, and the T2H is the lesion
+outside them. Registered segmentations must use nearest-neighbour
+interpolation.
+
+Distance maps (`desc-` label): `iso` (isotropic), `isoweighted` (isotropic
+weighted, primary), `aniso` (anisotropic), `anisoweighted` (anisotropic
+weighted), `contraisoweighted` (isotropic weighted from the mirrored CET,
+contralateral control) and `isoweightedcetdil` (isotropic weighted from the CET
+dilated by two voxels). The same labels appear in the output file names.
+
+Other maps can be tried without changing the rest of the pipeline:
+
+- **Other seeds or weighting:** add one line to `MAPS` in `distance_maps.py`,
+  e.g. `isoweightedlesion` (seeds = whole lesion, i.e. distance from the
+  T2H–NAWM boundary), then use its name in `maps` of
+  `gam_distance_profiles.R`. With lesion seeds the T2H voxels have distance 0
+  and are left out, so the profile covers the NAWM only and the landmark is
+  searched over the whole distance range.
+- **Other propagation model:** edit `speed()` (weighting by axial diffusivity)
+  or `anisotropy()` (speed along and across the fiber direction from the FOD
+  peak ratio) in the block PROPAGATION MODEL of `distance_maps.py`. These
+  functions apply to all maps, so add a new entry to `MAPS` (e.g. a copy of
+  `aniso` named `anisotest`) and run only that one (`MAPS_TO_RUN`); existing
+  maps are kept.
+
+File names are defined in the block **PATHS AND INPUT FILES** at the top of
+the script (`metric_file`, `input_files()`); only this block needs
+to change for a different folder structure.
+
+## Running
+
+```
+python distance_maps.py                      # step 1, all included participants
+Rscript gam_distance_profiles.R              # step 3, all included participants
+Rscript plot_profiles.R                      # step 4
+Rscript summarize_profiles.R                 # step 5
+Rscript compare_sensitivity.R                # step 6, after the sensitivity / contralateral runs
+
+python distance_maps.py sub-P001             # one or more participants only
+Rscript gam_distance_profiles.R sub-P001
+```
+
+Without arguments, both scripts process every participant with `include = 1`
+in `participants.tsv`; participant IDs given on the command line override the
+table. Both scripts keep what is already computed, so an interrupted run
+restarts where it stopped, and a missing file or failed fit in one participant
+is reported without stopping the run. Set `RECOMPUTE = True`
+(`distance_maps.py`) or `recompute <- TRUE` (`gam_distance_profiles.R`) to
+redo existing results, e.g. after changing input files or masks.
+The summary tables of `gam_distance_profiles.R` (`*_GAM.csv`, `*_curves.csv`,
+`*_popcurve.csv`) contain the participants of the last call; running it again
+without arguments rebuilds them for the whole cohort from the cache.
+
+The default settings reproduce the **main analysis** (six metrics, four
+distance maps, block bootstrap with B = 100).
+
+The other analyses of the paper are obtained by changing the settings below
+and running the scripts again:
+
+| Analysis | Settings |
+|---|---|
+| Main analysis | defaults |
+| Contralateral control | step 1 with `MAPS_TO_RUN = ["contraisoweighted"]`; step 3 with `maps <- "contraisoweighted"`, `contralateral <- TRUE` |
+| Smoothing sensitivity | `smoothing_penalty <- 1.0`, `n_bootstrap <- 0` |
+| Landmark-tolerance sensitivity | `tol_scale <- 0.5` or `2`, `n_bootstrap <- 0` |
+| T2H-boundary sensitivity | `t2h_perturb_voxels <- -1L` or `1L`, `n_bootstrap <- 0` |
+| CET-boundary sensitivity | step 1 with `MAPS_TO_RUN = ["isoweightedcetdil"]`; step 3 with `maps <- "isoweightedcetdil"`, `n_bootstrap <- 0` |
+
+Each run is saved under its own `run_tag`, so runs do not overwrite each other.
+`compare_sensitivity.R` then compares the landmarks of the chosen runs (setting
+`compare`) with the main analysis: Spearman ρ with bootstrap CI, median absolute
+landmark shift and the share of participants whose landmark changed.
+With `run_contralateral <- TRUE` it also compares the main run with the
+contralateral run: a figure of the population profiles of both sides and their
+paired difference, and a table of deviance explained, AIC gain per 1,000 voxels
+and mean white-matter value (paired Wilcoxon test, FDR across metrics).
+`ipsilateral_voxels <- "nawm"` refits the ipsilateral profiles on NAWM voxels
+only (tissue-matched control) from the voxel cache. Participants listed in
+`excluded_participants` (e.g. tumor spread into the contralateral hemisphere)
+are left out of the tests and summarized separately.
+
+## Output
+
+For each metric × distance map × run, in `<bids_root>/derivatives/distance_profiles/`:
+
+- `*_GAM.csv` — one row per participant: voxel counts, k, k-index, edf,
+  deviance explained, AIC gain, Moran's I of the residuals, landmark
+  (`first_peak` from the original fit; `fp_boot_median` and 95% CI from the
+  block bootstrap), selection step of the landmark, local gradient
+  (`mean_deriv_to_peak`).
+- `*_curves.csv` — fitted curve of each participant on a normalized 0–1
+  distance grid (raw and mean-centered).
+- `*_popcurve.csv` — population curve (equal-weight mean of participant curves)
+  with participant-bootstrap 95% CI.
+
+## Method summary
+
+- **Sampling domain:** NAWM plus the whole T2H (taken irrespective of tissue
+  class), excluding the CET; metric values above the 99th percentile and
+  distances outside the 1st–95th percentile are removed per participant.
+- **GAM:** `metric ~ s(distance, bs = "cr", k)`, REML, γ = 1.5;
+  k = min(30, max(10, ⌊n/15⌋)), raised to 45 if the k-index is < 0.8 and
+  edf/k > 0.9.
+- **Landmark:** first peak (trough for ADC) within the T2H distance range
+  (all extrema if none lies there) whose fitted value is within a tolerance of
+  the NAWM mean; the tolerance is widened in up to five steps, with the
+  extremum closest to the NAWM mean as final fallback.
+- **Local gradient:** mean derivative from the smallest fitted distance to the
+  landmark.
+- **Uncertainty:** spatial block bootstrap (5 × 5 × 5 mm cubes, B = 100),
+  conditional on the segmentation and distance map.
