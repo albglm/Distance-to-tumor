@@ -63,7 +63,7 @@ fit <- gam[, .(
 
 features <- gam[, .(
   n                 = .N,
-  landmark_distance = med_iqr(fp_boot_median),      # block-bootstrap median; index units (mm for iso)
+  landmark_distance = med_iqr(fcoalesce(as.numeric(fp_boot_median), first_peak)),   # bootstrap median, or the fit's landmark without bootstrap; index units (mm for iso)
   local_gradient    = med_iqr(mean_deriv_to_peak)   # metric units per distance unit
 ), keyby = .(metric, map)]
 

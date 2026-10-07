@@ -131,9 +131,18 @@ installation before using real data:
 python make_example_data.py /path/to/example_bids
 ```
 
-Set `bids_root` (and `results_dir`) to that folder. With `n_bootstrap <- 10`,
-step 2 takes a few minutes; the landmarks should be at about 5 mm. Step 1 needs
-the HFM library; set `RECOMPUTE = True` to test it on these data.
+Then set `bids_root` in `gam_distance_profiles.R` and `results_dir` in
+`plot_profiles.R` to that folder. For a quick run (under a minute) also set
+`maps <- "isoweighted"` and `n_bootstrap <- 0`:
+
+```
+Rscript gam_distance_profiles.R
+Rscript plot_profiles.R
+```
+
+The landmarks should be at about 5 mm in all three participants. Step 1 needs
+the HFM library; set `RECOMPUTE = True` in `distance_maps.py` to test it on
+these data.
 
 ## Running
 

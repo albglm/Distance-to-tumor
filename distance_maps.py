@@ -58,6 +58,9 @@ OUTPUT
 
 Requirements: Python 3 with numpy, nibabel, scipy; the HamiltonFastMarching
 library (https://github.com/Mirebeau/HamiltonFastMarching), compiled locally.
+Reference: Mirebeau J-M, Portegies J. Hamiltonian Fast Marching: a numerical
+solver for anisotropic and non-holonomic eikonal PDEs. Image Processing On Line
+2019;9:47-93. doi:10.5201/ipol.2019.227
 """
 
 import csv

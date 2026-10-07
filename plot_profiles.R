@@ -74,7 +74,7 @@ region_means <- function(v) {
 
 landmarks <- function(metric, curves) {
   d <- fread(result_file(metric, "GAM"))[status == "ok"]
-  d <- d[, .(participant, landmark = fifelse(is.na(fp_boot_median), first_peak, fp_boot_median))][is.finite(landmark)]
+  d <- d[, .(participant, landmark = fcoalesce(as.numeric(fp_boot_median), first_peak))][is.finite(landmark)]
   d[, fitted := { s <- curves[participant == .BY$participant]
                   approx(s$distance_raw, s$fitted, xout = landmark, rule = 2)$y }, by = participant]
 }
