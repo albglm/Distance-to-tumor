@@ -16,7 +16,8 @@
 #
 # HOW TO RUN
 #   1. Edit the two blocks below: "PATHS AND INPUT FILES" and "ANALYSIS".
-#   2. Rscript gam_distance_profiles.R
+#   2. Rscript gam_distance_profiles.R                    all included participants
+#      Rscript gam_distance_profiles.R sub-P001 sub-P002  only these participants
 #   The default settings reproduce the main analysis of the paper. The other
 #   analyses (contralateral control, sensitivity analyses) are obtained by
 #   changing the settings marked [VARIANT]; see README.md.
@@ -45,9 +46,11 @@ library(furrr)
 bids_root  <- "/path/to/bids"
 output_dir <- file.path(bids_root, "derivatives", "distance_profiles")
 
-# participants.tsv: participant_id (e.g. sub-P001) and include (1 = analysed)
-participants    <- fread(file.path(bids_root, "participants.tsv"), sep = "\t")
-participant_ids <- participants[include == 1, participant_id]
+# participants: IDs given on the command line, otherwise all rows of
+# participants.tsv with include = 1 (columns participant_id, include)
+participant_ids <- commandArgs(trailingOnly = TRUE)
+if (!length(participant_ids))
+  participant_ids <- fread(file.path(bids_root, "participants.tsv"), sep = "\t")[include == 1, participant_id]
 
 # Each metric is sampled in its own space: GRE-derived metrics in GRE space
 # (anat), ADC and FA in diffusion space (dwi). All masks and distance maps must
