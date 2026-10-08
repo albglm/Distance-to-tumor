@@ -16,6 +16,7 @@ analysis can be inspected and applied to other datasets.
 | 3. Figures | `plot_profiles.R` | population profiles, participant profiles, example participants |
 | 4. Summary tables | `summarize_profiles.R` | fit diagnostics and landmark/gradient summary per metric and map |
 | 5. Sensitivity analyses and contralateral control (optional) | `compare_sensitivity.R` | landmark agreement of sensitivity runs with the main analysis; ipsilateral vs contralateral profiles and fit statistics |
+| 6. Survival analysis (optional) | `survival_analysis.R` | Cox models of landmark and gradient vs overall survival, clinical sensitivity analyses, MGMT comparisons and Kaplan–Meier figure |
 
 Each qMRI map must be in the same space as its distance map and masks; any
 registration between diffusion and other image spaces is done by the user
@@ -39,12 +40,12 @@ uncertainty (spatial block bootstrap), fit diagnostics and population curves.
   [HamiltonFastMarching](https://github.com/Mirebeau/HamiltonFastMarching)
   library compiled locally (step 1)
 - R ≥ 4.4 with `RNifti`, `data.table`, `mgcv`, `future`, `furrr` (step 2) and
-  `ggplot2`, `patchwork` (steps 3-5)
+  `ggplot2`, `patchwork` (steps 3-5), `survival`, `scales` (step 6)
 - Preprocessed images per participant (see Input)
 
 ```
 pip install numpy nibabel scipy
-Rscript -e 'install.packages(c("RNifti", "data.table", "mgcv", "future", "furrr", "ggplot2", "patchwork"))'
+Rscript -e 'install.packages(c("RNifti", "data.table", "mgcv", "future", "furrr", "ggplot2", "patchwork", "survival", "scales"))'
 ```
 
 ## Input
@@ -60,7 +61,8 @@ interpolation.
 
 ```
 <bids_root>/
-├── participants.tsv                      participant_id, include (1 = analysed)
+├── participants.tsv                      participant_id, include (1 = analysed);
+│                                         clinical columns for step 6 (see below)
 └── derivatives/
     ├── qmri/sub-P001/
     │   ├── anat/sub-P001_space-gre_R2starmap.nii.gz
@@ -153,6 +155,7 @@ Rscript gam_distance_profiles.R              # step 2, all included participants
 Rscript plot_profiles.R                      # step 3
 Rscript summarize_profiles.R                 # step 4
 Rscript compare_sensitivity.R                # step 5, after the sensitivity / contralateral runs
+Rscript survival_analysis.R                  # step 6
 
 python distance_maps.py sub-P001             # one or more participants only
 Rscript gam_distance_profiles.R sub-P001
@@ -196,6 +199,14 @@ and mean white-matter value (paired Wilcoxon test, FDR across metrics).
 only (tissue-matched control) from the voxel cache. Participants listed in
 `excluded_participants` (e.g. tumor spread into the contralateral hemisphere)
 are left out of the tests and summarized separately.
+
+For step 6, `participants.tsv` also holds the clinical data, one column per
+variable, with `n/a` for missing values: survival time in days (`os_days`),
+event (`os_event`, 1 = death), MGMT status (`mgmt`, 1 = methylated) and the
+covariates of the sensitivity analysis (`age`, `tumor_volume_fraction`, `kps`,
+`residual_ce`). The column names are set at the top of `survival_analysis.R`;
+covariates without a column are skipped. The sensitivity and MGMT analyses
+need at least 10 participants.
 
 ## Output
 
