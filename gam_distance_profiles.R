@@ -95,8 +95,8 @@ maps    <- c("iso", "isoweighted", "aniso", "anisoweighted")
 # mirrored CET) and contralateral <- TRUE
 contralateral <- FALSE
 
-# restrict the sampling domain to the tumor hemisphere (main analysis only)
-restrict_to_tumor_hemisphere <- TRUE
+# restrict the sampling domain to the tumor hemisphere
+restrict_to_tumor_hemisphere <- FALSE
 
 # landmark tolerance: widened at most this many times (start and step: metric_table)
 nawm_tol_max_steps <- 5
